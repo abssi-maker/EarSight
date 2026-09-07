@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+*.env.local
+
+# Google credentials
+service-account*.json
+*-credentials.json
+
+
+# All demo output artefacts (generated, not source)
+demo/output/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Node (frontend)
+node_modules/
+.next/
+frontend/.next/
+frontend/node_modules/
+
+# Test artefacts
+.pytest_cache/
+htmlcov/
+.coverage

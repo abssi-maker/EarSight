@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .bob/hooks/session-log.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
