@@ -43,14 +43,18 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/earsight-frontend:$COMMIT_SHA']
 
   # ── Deploy to Cloud Run ───────────────────────────────────────────────────────
+  # All agent services use Vertex AI + ADC via the Cloud Run service account.
+  # GOOGLE_CLOUD_PROJECT is injected as an env var (not a secret).
+  # No GOOGLE_API_KEY in production — the service account credential is sufficient.
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
       - 'run', 'deploy', 'earsight-orchestrator'
       - '--image', 'gcr.io/$PROJECT_ID/earsight-orchestrator:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -58,8 +62,9 @@ steps:
       - '--image', 'gcr.io/$PROJECT_ID/earsight-transcriber:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -67,8 +72,9 @@ steps:
       - '--image', 'gcr.io/$PROJECT_ID/earsight-framer:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -76,8 +82,9 @@ steps:
       - '--image', 'gcr.io/$PROJECT_ID/earsight-describer:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -85,8 +92,9 @@ steps:
       - '--image', 'gcr.io/$PROJECT_ID/earsight-synthesiser:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -94,8 +102,9 @@ steps:
       - '--image', 'gcr.io/$PROJECT_ID/earsight-mixer:$COMMIT_SHA'
       - '--region', '${_REGION}'
       - '--allow-unauthenticated'
+      - '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
       - '--set-secrets'
-      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:

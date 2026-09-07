@@ -34,6 +34,14 @@ GEMINI_MODELS = [
 
 
 def _get_client() -> genai.Client:
+    """
+    Use Vertex AI (ADC / service account) when running on Cloud Run
+    (GOOGLE_CLOUD_PROJECT is set).  Fall back to API key for local dev.
+    """
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if project:
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+        return genai.Client(vertexai=True, project=project, location=location)
     return genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
 

@@ -163,7 +163,7 @@ code with no deployment. This is the step that makes Tuesday night survivable.
 
 ### Step 3 — Real transcription + gap map over Kafka
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-07`
 
 **Intent**  
 Replace the transcriber and framer stubs with the real implementations from Step 1,
