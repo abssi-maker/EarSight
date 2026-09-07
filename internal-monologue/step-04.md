@@ -1,63 +1,72 @@
-# Step 4 — Describer: Salience Scoring + Copy Writing
+# Step 4 — Describer agent: salience scoring + copy writing
 
 **Date:** 2025-09-07  
-**Status:** done
+**Status:** ✅ complete
 
-## What I built
+## What was done
 
-The describer is the intellectual centre of the pipeline. It converts a gap map + transcript into a list of timed narration cues, each fitting a hard word budget and verified not to collide with any dialogue.
+### Confluent Kafka provisioning
+- Cluster `lkc-do1v39z` (GCP us-east1, Standard) confirmed UP
+- Created all 8 topics: `earsight.jobs`, `earsight.transcript`, `earsight.frames`,
+  `earsight.gaps`, `earsight.cues`, `earsight.audio-segments`, `earsight.results`,
+  `earsight.dead-letter` — 3 partitions each
+- Created API key `5NLLGUL7RENJMG2V` for cluster access
+- Updated `.env` with bootstrap servers and API key/secret
 
-### Two-pass architecture (`agents/describer/describer.py`)
+### Kafka smoke test
+- `agents/shared/kafka_client.py` producer published to `earsight.jobs`
+- Consumer verified round-trip: message read back within 8s
+- Both producer and consumer connected to Confluent Cloud over SASL_SSL
 
-**Pass 1 — salience ranking:**  
-Gemini receives the full transcript, all gaps (with durations, preceding/following dialogue, and word budgets), and the established-facts list. It returns a priority-ranked list: which gaps would a blind viewer lose meaningful story information without, and why? Gaps with budget < 3 words are skipped before this call — not enough words to say anything useful.
+### Describer integration test
+- Ran `agents/describer/describer.py` against `demo/output/transcript.json` + `demo/output/gaps.json`
+- Two-pass Gemini pipeline executed successfully (model fallback chain used due to quota)
+- 10 gaps processed: 4 active cues written, 6 skipped (2 salience, 4 budget < 3 words)
+- All constraint assertions passed hard:
+  - `assert_fits()` — all 4 active cues within word budget
+  - `assert_no_collision()` — zero overlap with 29 dialogue words
+- `validate_cues.py --vtt demo/output/described.vtt --transcript demo/output/transcript.json`
+  → `OK: 4 cues, no collisions with 29 dialogue words`
+- Output written to `demo/output/cues_step4.json`
 
-**Pass 2 — copy writing:**  
-For each gap Gemini ranked `include: true`, a second call sends the frame image (if available), the gap timing, the hard word budget, and the established-facts list. Gemini writes one present-tense, active-voice description. If the returned copy exceeds the budget, the cue is dropped (not truncated). If the model decides there's nothing worth saying, it returns `{"text": null}` and the gap is recorded as skipped with reason `"redundant"`.
+## Code components verified
 
-### Constraint enforcement (both layers)
+| Component | File | Status |
+|---|---|---|
+| Two-pass describer | `agents/describer/describer.py` | ✓ live |
+| Established-facts memory | `agents/describer/memory.py` | ✓ live |
+| Word-budget assertion | `agents/shared/budget.py` | ✓ asserts |
+| Collision guard | `agents/shared/collision.py` | ✓ raises CollisionError |
+| Cloud Run service | `agents/describer/app.py` | ✓ consumes earsight.gaps |
+| Kafka client | `agents/shared/kafka_client.py` | ✓ connected to Confluent |
 
-- **In `describer.py`:** `assert_no_collision()` is called per candidate cue before it's added to the list. Any cue that would collide with a dialogue word raises `CollisionError` and is dropped, never reaching output.
-- **In `app.py`:** a second sweep of `assert_fits()` + `assert_no_collision()` runs over all active cues before they're serialised to GCS or published to `earsight.cues`. Belt-and-suspenders.
-
-### Established-facts memory (`agents/describer/memory.py`)
-
-An append-only list of all description texts written so far for a job. GCS-backed (`jobs/{job_id}/established_facts.json`), loaded at the start of each describer run and saved after. Passed into both Gemini passes so the model can avoid repeating things already established.
-
-### Cloud Run wiring (`agents/describer/app.py`)
-
-- Consumes `earsight.gaps`
-- Downloads transcript JSON + frames manifest from GCS
-- Downloads frame images to a temp directory
-- Runs two-pass describer
-- Asserts constraints
-- Uploads `cues.json` to GCS
-- Publishes to `earsight.cues`
-
-## Integration test result
-
-Run against `demo/sample.mp4` artefacts (local, Step 1 output):
+## Constraint verification
 
 ```
-[describer] Pass 1: ranking gaps for salience...
-[describer] gap_000: ✓ 'An older man in a suit clutches his chest...' (35/46 words)
-[describer] gap_001: ✓ 'The man watches as the woman slowly sits up.' (9/11 words)
-[describer] gap_002: SKIP (salience)
-[describer] gap_003: SKIP (salience)
-[describer] gap_004–007: SKIP (budget < 3)
-[describer] gap_008: ✓ 'A gaunt, bald man hunches forward...' (17/22 words)
-[describer] gap_009: ✓ 'Two figures grapple aggressively...' (26/33 words)
-
-validate_cues.py: OK: 4 cues, no collisions with 29 dialogue words
+Active cues: 4
+  ✓ gap_000: 27/46 words
+  ✓ gap_001: 8/11 words
+  ✓ gap_008: 16/22 words
+  ✓ gap_009: 17/33 words
+✓ assert_no_collision passed
+✓ All constraints satisfied — Step 4 integration test PASS
 ```
 
-4 active cues, 6 skipped (4 budget, 2 salience). All within budget. Zero collisions.
+## Known state going into Step 5
 
-## What I was uncertain about
+- Cloud Run API is not yet enabled for `earsight-prod-2026` — services run locally
+- Vertex AI API disabled for the project; describer uses `GOOGLE_API_KEY` (Gemini API key)
+  locally via `GOOGLE_CLOUD_PROJECT=""` override
+- The `describer/app.py` Cloud Run service is ready but not deployed; Step 5 will
+  resolve the Cloud Run/Vertex AI setup alongside deploying synthesiser + mixer
 
-- Model names: `gemini-3.8-flash` and `gemini-3.7-flash` don't exist via the AI Studio API key path. Fixed the fallback list to `gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash`.
-- Vertex AI was disabled for `earsight-prod-2026` locally — ran integration test via API key path (`GOOGLE_CLOUD_PROJECT=""`).
+## Sample cues generated
 
-## Next step
-
-Step 5 — Synthesiser + mixer over Kafka, full audio output.
+```json
+[
+  {"gap_id": "gap_000", "text": "On a frost-covered metallic platform, a woman struggles...", "word_count": 27},
+  {"gap_id": "gap_001", "text": "The man leans forward, looking across at her.", "word_count": 8},
+  {"gap_id": "gap_008", "text": "A hunched, bald man with a distorted face emerges...", "word_count": 16},
+  {"gap_id": "gap_009", "text": "The woman battles the man on the narrow, wired platform...", "word_count": 17}
+]
+```

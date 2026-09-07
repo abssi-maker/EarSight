@@ -266,7 +266,7 @@ No UI yet — this is a `curl`-driven end-to-end test.
 
 ### Step 6 — Frontend: upload, pipeline view, player
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-07`
 
 **Intent**  
 Build the Next.js frontend that makes the system usable and visually legible. This

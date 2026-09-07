@@ -10,12 +10,42 @@ export interface JobRequest {
   label?: string;
 }
 
+export interface CueRecord {
+  cue_id: string;
+  gap_id: string;
+  start: number;
+  end: number;
+  text: string | null;
+  word_count: number;
+  skip_reason?: string | null;
+}
+
 export interface JobResponse {
   job_id: string;
   status: string;
+  gap_count?: number | null;
+  transcript_word_count?: number | null;
+  cues?: CueRecord[] | null;
   result_video_url?: string | null;
   vtt_url?: string | null;
   error?: string | null;
+}
+
+export async function uploadVideo(file: File): Promise<string> {
+  // Upload the video to the orchestrator's /upload endpoint, which saves to GCS
+  // and returns a gs:// URI.
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BASE_URL}/upload`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`POST /upload ${res.status}: ${text}`);
+  }
+  const data = await res.json();
+  return data.gcs_uri as string;
 }
 
 export async function createJob(req: JobRequest): Promise<JobResponse> {
