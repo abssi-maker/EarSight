@@ -1,0 +1,114 @@
+steps:
+  # ── Build & push all service images ──────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.orchestrator',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-orchestrator:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-orchestrator:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.transcriber',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-transcriber:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-transcriber:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.framer',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-framer:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-framer:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.describer',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-describer:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-describer:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.synthesiser',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-synthesiser:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-synthesiser:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.mixer',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-mixer:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-mixer:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.frontend',
+           '-t', 'gcr.io/$PROJECT_ID/earsight-frontend:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/earsight-frontend:$COMMIT_SHA']
+
+  # ── Deploy to Cloud Run ───────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-orchestrator'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-orchestrator:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-transcriber'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-transcriber:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-framer'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-framer:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-describer'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-describer:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-synthesiser'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-synthesiser:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-mixer'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-mixer:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GCS_BUCKET=GCS_BUCKET:latest'
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run', 'deploy', 'earsight-frontend'
+      - '--image', 'gcr.io/$PROJECT_ID/earsight-frontend:$COMMIT_SHA'
+      - '--region', '${_REGION}'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'NEXT_PUBLIC_ORCHESTRATOR_URL=${_ORCHESTRATOR_URL}'
+
+substitutions:
+  _REGION: us-central1
+  _ORCHESTRATOR_URL: ''   # override at deploy time
+
+options:
+  logging: CLOUD_LOGGING_ONLY

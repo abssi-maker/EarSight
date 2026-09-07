@@ -92,7 +92,8 @@ demo clip, every subsequent step is integration work, not discovery.
 5. `agents/describer/describer.py` — silence detection from transcript, word-budget
    calculation (gap_seconds × 2.75), Gemini multimodal call (frame + context) → cue copy;
    the collision guard goes here as an assertion that raises before any cue is written
-6. `agents/synthesiser/synthesiser.py` — Vertex AI TTS (Chirp 3 HD or equivalent) per cue
+6. `agents/synthesiser/synthesiser.py` — Gemini Flash TTS (`gemini-2.5-flash-preview-tts`
+   via `google-genai`) per cue — same SDK as the rest of the pipeline, no extra dependency
 7. `agents/mixer/mixer.py` — ffmpeg to duck original audio under narration and mux
 8. `scripts/pipeline.py` — sequential orchestration of the above modules
 9. `scripts/validate_cues.py` — parse VTT, assert zero collision with transcript timings
@@ -101,7 +102,8 @@ demo clip, every subsequent step is integration work, not discovery.
 
 **Relevant context**
 - Gemini audio understanding: `google.generativeai.upload_file()` + `gemini-1.5-pro`
-- Vertex AI TTS: `google.cloud.texttospeech_v1` or Chirp 3 via Vertex endpoint
+- Gemini Flash TTS: `google-genai` client, model `gemini-2.5-flash-preview-tts`;
+  `client.models.generate_content()` with `GenerateContentConfig(response_modalities=["AUDIO"])`
 - ffmpeg: invoked via `subprocess` or `ffmpeg-python` wrapper
 - Silence gap = any span ≥ 0.5 s with no transcript word overlapping it
 - Word budget = `floor(gap_duration_seconds × 2.75)` — hard ceiling, not a guide
@@ -110,7 +112,7 @@ demo clip, every subsequent step is integration work, not discovery.
 
 ### Step 2 — Deployment skeleton + Confluent wiring
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-07`
 
 **Intent**  
 Deploy six Cloud Run services and wire them with Confluent Kafka topics before
@@ -256,7 +258,7 @@ No UI yet — this is a `curl`-driven end-to-end test.
 4. Mixer produces final files to GCS, publishes completion to `earsight.results`
 5. Orchestrator consumes `earsight.results`, updates job record, makes URLs available
 6. End-to-end `curl` test using `demo/sample.mp4`, verify both output files exist
-7. Cache Gemini + TTS responses for the demo clip in `demo/cache/` so demo never
+7. Cache Gemini + Flash TTS responses for the demo clip in `demo/cache/` so demo never
    hits live quota
 8. Write `internal-monologue/step-05.md`
 
