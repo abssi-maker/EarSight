@@ -22,7 +22,7 @@ from typing import Optional
 from google import genai
 from google.genai import types
 from google.adk.agents import LlmAgent
-from google.adk.runners import Runner
+from google.adk.runners import Runner, RunConfig
 from google.adk.sessions import InMemorySessionService
 from dotenv import load_dotenv
 
@@ -216,7 +216,6 @@ def _run_adk_gap(
         app_name="earsight_describer",
         agent=agent,
         session_service=session_service,
-        max_llm_calls=_MAX_LLM_CALLS,
     )
 
     async def _run() -> tuple[Optional[str], Optional[str]]:
@@ -235,6 +234,7 @@ def _run_adk_gap(
             user_id="system",
             session_id=session.id,
             new_message=types.Content(role="user", parts=user_parts),
+            run_config=RunConfig(max_llm_calls=_MAX_LLM_CALLS),
         ):
             if hasattr(event, "content") and event.content:
                 for part in event.content.parts:

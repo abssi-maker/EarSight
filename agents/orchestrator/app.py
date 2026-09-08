@@ -156,21 +156,10 @@ def _handle_result(msg: dict) -> None:
         return
     with _jobs_lock:
         if job_id in _jobs:
-            raw_video = msg.get("result_video_url")
-            raw_vtt = msg.get("vtt_url")
-            # Convert gs:// URIs to signed HTTPS URLs so browsers can load them
-            try:
-                video_url = gcs.signed_url(raw_video) if raw_video and raw_video.startswith("gs://") else raw_video
-            except Exception:
-                video_url = raw_video
-            try:
-                vtt_url_val = gcs.signed_url(raw_vtt) if raw_vtt and raw_vtt.startswith("gs://") else raw_vtt
-            except Exception:
-                vtt_url_val = raw_vtt
             _jobs[job_id].update({
                 "status": msg.get("status", "done"),
-                "result_video_url": video_url,
-                "vtt_url": vtt_url_val,
+                "result_video_url": msg.get("result_video_url"),
+                "vtt_url": msg.get("vtt_url"),
                 "error": msg.get("error"),
                 "finished_at": time.time(),
             })
@@ -342,4 +331,13 @@ def get_job(job_id: str):
         job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    # Convert gs:// URIs to signed HTTPS URLs at response time so browsers can load them
+    out = dict(job)
+    for field in ("result_video_url", "vtt_url"):
+        raw = out.get(field)
+        if raw and raw.startswith("gs://"):
+            try:
+                out[field] = gcs.signed_url(raw)
+            except Exception as exc:
+                print(f"[orchestrator] signed_url failed for {field}: {exc}")
+    return out
