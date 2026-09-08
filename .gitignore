@@ -23,6 +23,8 @@ service-account*.json
 
 # All demo output artefacts (generated, not source)
 demo/output/
+!demo/output/described.vtt
+!demo/output/transcript.json
 
 # Editor
 .DS_Store

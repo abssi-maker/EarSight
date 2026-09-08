@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate cues — no collision with dialogue
+        run: |
+          python scripts/validate_cues.py \
+            --vtt demo/output/described.vtt \
+            --transcript demo/output/transcript.json
+
+      - name: Banned runtime dependency check
+        run: |
+          grep -r "openai\|anthropic\|bedrock\|azure.cognitiveservices" \
+            requirements.txt pyproject.toml agents/ \
+            --include="*.py" --include="*.txt" --include="*.toml" \
+            && exit 1 || exit 0

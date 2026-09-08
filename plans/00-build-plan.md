@@ -345,7 +345,7 @@ live quota.
 
 ### Step 8 — Bob evidence trail + README completion
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-08`
 
 **Intent**  
 Ensure the repository reads as an auditable IBM Bob build to a judge who has never

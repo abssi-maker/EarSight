@@ -7,11 +7,56 @@ short videos. It finds silences between dialogue, decides what is worth narratin
 each gap, synthesises speech, and mixes it into the original audio — returning a
 described `.mp4` and a WebVTT cue sheet.
 
-> Built with [IBM Bob](https://www.ibm.com/products/bob) — see [§ Built with IBM Bob](#built-with-ibm-bob)
+---
+
+## Built with IBM Bob
+
+This project was built step-by-step using **[IBM Bob](https://www.ibm.com/products/bob)**
+as the sole AI engineering assistant. Every architectural decision, every file, every
+commit was authored in a Bob session following the §6 stop-and-wait workflow: plan
+first in Plan mode, implement one step per session, stop and wait for approval, commit
+only after approval.
+
+### Verifiable evidence
+
+| Artefact | Count | Location |
+|---|---|---|
+| Commits with `Built-with: IBM-Bob` trailer | 11 of 12 | `git log` |
+| Commits with `Co-authored-by: IBM Bob` trailer | 10 of 12 | `git log` |
+| Bob sessions logged (with timestamps + session IDs) | 21 | [`docs/bob/session-log.md`](docs/bob/session-log.md) |
+| Step monologues | 6 | [`internal-monologue/`](internal-monologue/) |
+| Workflow rules in `.bob/rules/` | 5 | [`.bob/rules/`](.bob/rules/) |
+| Build plan (authored in Plan mode, pre-code) | 1 | [`plans/00-build-plan.md`](plans/00-build-plan.md) |
+
+The only commit with neither trailer is `2146a91` "Initial commit" — the empty repo
+scaffold created before Bob was engaged. `d69def3` carries `Built-with` but not
+`Co-authored-by`; it was deliberately not rewritten after push.
+
+Run these yourself:
+
+```bash
+# Total commits
+git log --format='%H %s' | wc -l
+
+# Commits carrying the IBM Bob trailer
+git log --format='%(trailers:key=Built-with)' | grep -c IBM-Bob
+```
+
+### .bob/rules/ — the §6 workflow encoded
+
+| Rule file | Purpose |
+|---|---|
+| `01-report-format.md` | Every step ends with the 5-line STEP N report |
+| `02-stop-and-wait.md` | One step per session, stop and wait for approval |
+| `03-commit-discipline.md` | One commit per approved step, push immediately |
+| `04-runtime-dependency-ban.md` | Google Cloud AI only — grep verified in CI |
+| `05-screenshot-requirement.md` | Every UI step captures a Playwright screenshot |
 
 ---
 
 ## Architecture
+
+6 services, 7 Confluent Kafka topics.
 
 ```
 [frontend]  →  upload  →  [orchestrator]
@@ -32,7 +77,7 @@ described `.mp4` and a WebVTT cue sheet.
 Every inter-service handoff crosses a **Confluent Kafka** topic.
 Six services on **Google Cloud Run**; media artefacts in **Google Cloud Storage**.
 
-### Kafka topics
+### Kafka topics (7)
 
 | Topic | Producer | Consumer |
 |---|---|---|
@@ -44,9 +89,57 @@ Six services on **Google Cloud Run**; media artefacts in **Google Cloud Storage*
 | `earsight.audio-segments` | synthesiser | mixer |
 | `earsight.results` | mixer | orchestrator |
 
+Dead-letter topic: `earsight.dead-letter` — unroutable or poison-pill messages land here.
+
 ---
 
-## Local setup (one-command)
+## Confluent Kafka
+
+Confluent Cloud is used as the managed Kafka backbone. All seven topics are provisioned
+on a Confluent Cloud cluster; producer/consumer code ships in every agent service — this
+is not mocked.
+
+**Producer config (all agents):**
+```python
+{'acks': 'all', 'enable.idempotence': True}
+```
+
+**Consumer pattern:**
+Each agent service runs a background thread consuming its input topic, auto-commits
+offsets only after successful processing. Unrecoverable errors are re-published to
+`earsight.dead-letter`.
+
+Agent-shared code: [`agents/shared/kafka_client.py`](agents/shared/kafka_client.py)
+
+---
+
+## Gemini + Google ADK
+
+| Component | Model / API |
+|---|---|
+| Transcription | `gemini-2.0-flash` audio understanding via `google-generativeai` upload |
+| Salience scoring | `gemini-2.0-flash` — `google-adk` `LlmAgent` with `Runner` |
+| Copy writing | `gemini-2.0-flash` — native ADK `LlmAgent`; `check_budget` and `check_collision` as forced function tools (`tool_config` mode=ANY) |
+| Video understanding | VideoMetadata offsets in the copy pass for gap-aligned frame context |
+| Speech synthesis | `gemini-2.5-flash-preview-tts` — audio-tag steering, SynthID watermarking |
+
+The describer is the intellectual centre of the system. Two-pass design: a **context
+pass** ranks gaps by salience (what would a viewer lose?), then a **copy pass** writes
+word-budget-constrained narration for each prioritised gap. Both passes run as native
+ADK `LlmAgent`s.
+
+---
+
+## Hard constraints
+
+- **No cue overlaps dialogue** — `CollisionError` raised in [`agents/shared/collision.py`](agents/shared/collision.py) before any cue is published
+- **Word budget** — `floor(gap_seconds × 2.75)`, hard ceiling; cues that exceed budget are dropped, not truncated
+- **Input cap** — 90 seconds maximum, enforced in upload handler and pipeline entry point
+- **Google Cloud AI only** — no OpenAI / Anthropic / AWS / Microsoft AI anywhere in the dependency tree; verified on every push by CI
+
+---
+
+## Local setup
 
 ```bash
 # 1. Clone and enter
@@ -65,33 +158,22 @@ pip install -r requirements.txt
 python scripts/pipeline.py --input demo/sample.mp4 --output output/
 
 # 5. Validate — must exit 0
-python scripts/validate_cues.py output/described.vtt demo/sample.mp4
+python scripts/validate_cues.py --vtt output/described.vtt --transcript output/transcript.json
 ```
 
 ---
 
 ## Running services locally
 
-Each Python service is a FastAPI app. Start them individually:
+Each Python service is a FastAPI app:
 
 ```bash
-# Orchestrator (port 8000)
 uvicorn agents.orchestrator.app:app --port 8000 --reload
-
-# Transcriber (port 8001)
-uvicorn agents.transcriber.app:app --port 8001 --reload
-
-# Framer (port 8002)
-uvicorn agents.framer.app:app --port 8002 --reload
-
-# Describer (port 8003)
-uvicorn agents.describer.app:app --port 8003 --reload
-
-# Synthesiser (port 8004)
-uvicorn agents.synthesiser.app:app --port 8004 --reload
-
-# Mixer (port 8005)
-uvicorn agents.mixer.app:app --port 8005 --reload
+uvicorn agents.transcriber.app:app  --port 8001 --reload
+uvicorn agents.framer.app:app       --port 8002 --reload
+uvicorn agents.describer.app:app    --port 8003 --reload
+uvicorn agents.synthesiser.app:app  --port 8004 --reload
+uvicorn agents.mixer.app:app        --port 8005 --reload
 ```
 
 Frontend:
@@ -111,43 +193,30 @@ curl -X POST http://localhost:8000/jobs \
 ## Deploy to Google Cloud Run
 
 ```bash
-# Set your GCP project
 gcloud config set project YOUR_PROJECT_ID
 
-# Store secrets in Secret Manager (one-time setup)
+# Store secrets (one-time)
 echo -n "your-confluent-bootstrap" | gcloud secrets create CONFLUENT_BOOTSTRAP_SERVERS --data-file=-
 echo -n "your-api-key"             | gcloud secrets create CONFLUENT_API_KEY --data-file=-
 echo -n "your-api-secret"          | gcloud secrets create CONFLUENT_API_SECRET --data-file=-
 echo -n "your-gemini-key"          | gcloud secrets create GOOGLE_API_KEY --data-file=-
 echo -n "earsight-media"           | gcloud secrets create GCS_BUCKET --data-file=-
 
-# Trigger Cloud Build (builds all images, deploys all services)
-gcloud builds submit --config deploy/cloudbuild.yaml \
-  --substitutions _ORCHESTRATOR_URL=$(gcloud run services describe earsight-orchestrator \
-    --region us-central1 --format 'value(status.url)')
+# Build and deploy all services
+gcloud builds submit --config deploy/cloudbuild.yaml
 ```
 
 ---
 
-## Hard constraints
+## Known limitations
 
-- **No cue overlaps dialogue** — `CollisionError` raised before any cue is published
-- **Word budget** — `floor(gap_seconds × 2.75)`, hard ceiling
-- **Input cap** — 90 seconds maximum
-- **Google Cloud AI only** — no OpenAI / Anthropic / AWS / Microsoft AI
-
----
-
-## Built with IBM Bob
-
-This project was built step-by-step using **IBM Bob** as the sole AI engineering
-assistant, following the §6 workflow: plan first, implement one step per session,
-stop-and-wait for approval, commit only after approval.
-
-Evidence trail:
-- [`plans/00-build-plan.md`](plans/00-build-plan.md) — full build plan in Plan mode
-- [`internal-monologue/`](internal-monologue/) — one entry per approved step
-- [`docs/steps/`](docs/steps/) — screenshot per step
-- [`docs/bob/session-log.md`](docs/bob/session-log.md) — session log
-
-Every commit carries `Built-with: IBM-Bob` in its trailer.
+- **Orchestrator job store is in-memory and single-instance** — jobs are lost if the
+  orchestrator container restarts. A persistent store (Firestore, Cloud SQL) was not
+  adopted within the hackathon window.
+- **Vertex AI Agent Engine deployment was not adopted** — agents run as standard Cloud
+  Run services rather than managed Agent Engine instances. The ADK `LlmAgent` pattern
+  is in place; migrating to Agent Engine is a deploy-target change, not a code change.
+- **Step 7 resilience work was descoped** — partial-failure handling (mixer accepting
+  incomplete cue sets, per-agent deadline timeouts) was planned in Step 7 of the build
+  plan but deliberately skipped to focus budget on the evidence trail (Step 8). The
+  system is not fault-tolerant at the agent level; a failed agent will stall the job.

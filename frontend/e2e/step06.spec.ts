@@ -42,6 +42,9 @@ test.describe('Step 6 — EarSight frontend', () => {
       }
     });
 
+    // Synthetic peaks — 200 values, sine-wave shaped
+    const syntheticPeaks = Array.from({ length: 200 }, (_: unknown, i: number) => Math.abs(Math.sin(i / 7)) * 0.8 + 0.1);
+
     // Mock GET /jobs/test-job-001 — progress through states
     let callCount = 0;
     const states = [
@@ -51,6 +54,23 @@ test.describe('Step 6 — EarSight frontend', () => {
         job_id: 'test-job-001',
         status: 'done',
         gap_count: 4,
+        peaks_uri: 'http://localhost:8000/fake-peaks.json',
+        events: [
+          { ts: 0.1,  topic: 'earsight.jobs',           service: 'orchestrator', direction: 'produce' },
+          { ts: 0.2,  topic: 'earsight.jobs',           service: 'transcriber',  direction: 'consume' },
+          { ts: 1.2,  topic: 'earsight.transcript',     service: 'transcriber',  direction: 'produce' },
+          { ts: 1.3,  topic: 'earsight.transcript',     service: 'framer',       direction: 'consume' },
+          { ts: 2.1,  topic: 'earsight.frames',         service: 'framer',       direction: 'produce' },
+          { ts: 2.2,  topic: 'earsight.gaps',           service: 'describer',    direction: 'consume' },
+          { ts: 3.5,  topic: 'earsight.cues',           service: 'describer',    direction: 'produce' },
+          { ts: 3.6,  topic: 'earsight.cues',           service: 'synthesiser',  direction: 'consume' },
+          { ts: 4.8,  topic: 'earsight.audio-segments', service: 'synthesiser',  direction: 'produce' },
+          { ts: 4.9,  topic: 'earsight.audio-segments', service: 'mixer',        direction: 'consume' },
+          { ts: 5.8,  topic: 'earsight.results',        service: 'mixer',        direction: 'produce' },
+          { ts: 5.9,  topic: 'earsight.results',        service: 'orchestrator', direction: 'consume' },
+          { ts: 6.0,  topic: 'earsight.gaps',           service: 'describer',    direction: 'produce' },
+          { ts: 6.1,  topic: 'earsight.gaps',           service: 'describer',    direction: 'consume' },
+        ],
         cues: [
           { cue_id: 'cue_gap_000', gap_id: 'gap_000', start: 0,    end: 16.78, text: 'A woman struggles on a frost-covered platform.', word_count: 8,  skip_reason: null },
           { cue_id: 'cue_gap_001', gap_id: 'gap_001', start: 17.8, end: 22.06, text: 'The man leans forward.', word_count: 4,  skip_reason: null },
@@ -68,6 +88,15 @@ test.describe('Step 6 — EarSight frontend', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify(states[idx]),
+      });
+    });
+
+    // Mock /api/peaks proxy (Next.js API route) — returns synthetic waveform data
+    await page.route('**/api/peaks**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ duration: 60, peaks: syntheticPeaks }),
       });
     });
 
