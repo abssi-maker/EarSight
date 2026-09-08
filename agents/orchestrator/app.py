@@ -41,6 +41,19 @@ import agents.shared.gcs as gcs
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
+
+def _append_event(job_id: str, topic: str, service: str, direction: str) -> None:
+    """Append a pipeline event for the agent-lane visualisation."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job.setdefault("events", []).append({
+                "ts": time.time(),
+                "topic": topic,
+                "service": service,
+                "direction": direction,
+            })
+
 TOPIC_JOBS = "earsight.jobs"
 TOPIC_TRANSCRIPT = "earsight.transcript"
 TOPIC_FRAMES = "earsight.frames"
@@ -75,6 +88,7 @@ def _try_publish_gaps(job_id: str) -> None:
         "frames_manifest_uri": frames_manifest_uri,
     }, key=job_id)
     print(f"[orchestrator] job {job_id} → {TOPIC_GAPS} (both transcript+frames ready)")
+    _append_event(job_id, TOPIC_GAPS, "orchestrator", "produced")
 
 
 # ── background consumers ──────────────────────────────────────────────────────
@@ -85,10 +99,12 @@ def _handle_transcript(msg: dict) -> None:
     with _jobs_lock:
         if job_id in _jobs:
             _jobs[job_id]["transcript_uri"] = msg.get("transcript_uri")
+            _jobs[job_id]["peaks_uri"] = msg.get("peaks_uri")
             _jobs[job_id]["transcript_word_count"] = msg.get("word_count", 0)
             if _jobs[job_id]["status"] == "transcribing":
                 _jobs[job_id]["status"] = "framing"
             print(f"[orchestrator] transcript arrived for job {job_id}")
+    _append_event(job_id, TOPIC_TRANSCRIPT, "transcriber", "produced")
     _try_publish_gaps(job_id)
 
 
@@ -101,6 +117,7 @@ def _handle_frames(msg: dict) -> None:
             _jobs[job_id]["frames_manifest_uri"] = msg.get("frames_manifest_uri")
             _jobs[job_id]["gap_count"] = msg.get("gap_count", 0)
             print(f"[orchestrator] frames arrived for job {job_id} ({msg.get('gap_count')} gaps)")
+    _append_event(job_id, TOPIC_FRAMES, "framer", "produced")
     _try_publish_gaps(job_id)
 
 
@@ -119,6 +136,7 @@ def _handle_cues(msg: dict) -> None:
                     print(f"[orchestrator] could not fetch cues for {job_id}: {exc}")
             _jobs[job_id]["status"] = "synthesising"
             print(f"[orchestrator] cues arrived for job {job_id}")
+    _append_event(job_id, TOPIC_CUES, "describer", "produced")
 
 
 def _handle_audio_segments(msg: dict) -> None:
@@ -129,6 +147,7 @@ def _handle_audio_segments(msg: dict) -> None:
         if job_id in _jobs:
             _jobs[job_id]["status"] = "mixing"
             print(f"[orchestrator] audio segments arrived for job {job_id}")
+    _append_event(job_id, TOPIC_AUDIO_SEGMENTS, "synthesiser", "produced")
 
 
 def _handle_result(msg: dict) -> None:
@@ -156,6 +175,7 @@ def _handle_result(msg: dict) -> None:
                 "finished_at": time.time(),
             })
             print(f"[orchestrator] job {job_id} → {_jobs[job_id]['status']}")
+    _append_event(job_id, TOPIC_RESULTS, "mixer", "produced")
 
 
 def _start_consumers() -> None:
@@ -282,12 +302,15 @@ def create_job(req: JobRequest):
             "created_at": now,
             # filled in as completions arrive:
             "transcript_uri": None,
+            "peaks_uri": None,
             "frames_manifest_uri": None,
             "transcript_word_count": None,
             "gap_count": None,
             "gaps_published": False,
             # cue data (populated when earsight.cues arrives):
             "cues": None,
+            # pipeline events for agent-lane visualisation:
+            "events": [],
             # final outputs:
             "result_video_url": None,
             "vtt_url": None,
@@ -300,6 +323,7 @@ def create_job(req: JobRequest):
         "video_uri": req.video_uri,
     }, key=job_id)
     print(f"[orchestrator] published job {job_id} → {TOPIC_JOBS}")
+    _append_event(job_id, TOPIC_JOBS, "orchestrator", "produced")
 
     return JobResponse(job_id=job_id, status="transcribing")
 

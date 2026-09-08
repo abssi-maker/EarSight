@@ -1,5 +1,8 @@
 'use client';
 
+import Waveform from './Waveform';
+import { PeaksData } from '@/lib/api';
+
 // Segment states in pipeline order
 export type SegmentState =
   | 'detected'
@@ -25,6 +28,8 @@ export interface GapSegment {
 interface Props {
   segments: GapSegment[];
   totalDuration?: number;
+  peaksData?: PeaksData | null;
+  currentTime?: number;
 }
 
 const STATE_LABELS: Record<SegmentState, string> = {
@@ -37,12 +42,12 @@ const STATE_LABELS: Record<SegmentState, string> = {
 };
 
 const STATE_COLORS: Record<SegmentState, string> = {
-  detected: '#444',
-  framing: '#6b5',
-  describing: '#56b',
-  synthesising: '#b96',
+  detected: '#555',
+  framing: '#6db060',
+  describing: '#c4a35a',
+  synthesising: '#c4a35a',
   placed: '#f5a623',
-  skipped: '#333',
+  skipped: '#555',
 };
 
 function fmt(s: number): string {
@@ -51,51 +56,64 @@ function fmt(s: number): string {
   return `${m}:${sec}`;
 }
 
-export default function PipelineView({ segments, totalDuration }: Props) {
+export default function PipelineView({ segments, totalDuration, peaksData, currentTime = 0 }: Props) {
   if (segments.length === 0) {
     return (
-      <p style={{ color: '#555', fontSize: 13, marginTop: 24 }}>
+      <p style={{ color: '#767676', fontSize: 13, marginTop: 24 }}>
         Waiting for gap map…
       </p>
     );
   }
 
-  const total = totalDuration ?? (segments[segments.length - 1]?.end ?? 60);
+  const total = totalDuration ?? peaksData?.duration ?? (segments[segments.length - 1]?.end ?? 60);
 
   return (
     <section aria-label="Pipeline timeline" style={{ marginTop: 32 }}>
-      <h2 style={{ fontSize: 13, color: '#666', letterSpacing: '0.1em', marginBottom: 12, textTransform: 'uppercase' }}>
+      <h2 style={{ fontSize: 13, color: '#767676', letterSpacing: '0.1em', marginBottom: 12, textTransform: 'uppercase' }}>
         Pipeline · {segments.length} gaps
       </h2>
 
-      {/* Macro timeline bar */}
-      <div
-        role="img"
-        aria-label="Timeline showing gap positions"
-        style={{
-          position: 'relative',
-          height: 8,
-          background: '#1a1a1a',
-          borderRadius: 4,
-          marginBottom: 24,
-          overflow: 'hidden',
-        }}
-      >
-        {segments.map((seg) => (
-          <div
-            key={seg.gap_id}
-            style={{
-              position: 'absolute',
-              left: `${(seg.start / total) * 100}%`,
-              width: `${Math.max((seg.duration / total) * 100, 0.5)}%`,
-              height: '100%',
-              background: STATE_COLORS[seg.state],
-              opacity: seg.active_cue ? 1 : 0.6,
-              transition: 'background 0.4s',
-            }}
+      {/* Waveform hero — replaces the 8px macro bar */}
+      {peaksData ? (
+        <div style={{ marginBottom: 20 }}>
+          <Waveform
+            peaks={peaksData.peaks}
+            duration={total}
+            segments={segments}
+            currentTime={currentTime}
+            height={88}
           />
-        ))}
-      </div>
+        </div>
+      ) : (
+        /* Fallback macro bar when peaks not yet available */
+        <div
+          role="img"
+          aria-label="Timeline showing gap positions"
+          style={{
+            position: 'relative',
+            height: 8,
+            background: '#1a1a1a',
+            borderRadius: 4,
+            marginBottom: 24,
+            overflow: 'hidden',
+          }}
+        >
+          {segments.map((seg) => (
+            <div
+              key={seg.gap_id}
+              style={{
+                position: 'absolute',
+                left: `${(seg.start / total) * 100}%`,
+                width: `${Math.max((seg.duration / total) * 100, 0.5)}%`,
+                height: '100%',
+                background: STATE_COLORS[seg.state],
+                opacity: seg.active_cue ? 1 : 0.6,
+                transition: 'background 0.4s',
+              }}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Per-gap cards */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -123,9 +141,9 @@ export default function PipelineView({ segments, totalDuration }: Props) {
             >
               {/* Header row */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: '#555', fontFamily: 'monospace' }}>
+                <span style={{ fontSize: 11, color: '#767676', fontFamily: 'monospace' }}>
                   {fmt(seg.start)} – {fmt(seg.end)}&nbsp;
-                  <span style={{ color: '#333' }}>({seg.duration.toFixed(1)}s)</span>
+                  <span style={{ color: '#767676' }}>({seg.duration.toFixed(1)}s)</span>
                 </span>
                 <span
                   style={{
@@ -172,13 +190,13 @@ export default function PipelineView({ segments, totalDuration }: Props) {
                   }}
                 >
                   {seg.cue_text}
-                  <span style={{ color: '#555', marginLeft: 8 }}>
+                  <span style={{ color: '#767676', marginLeft: 8 }}>
                     [{seg.word_count}/{seg.word_budget}w]
                   </span>
                 </p>
               )}
               {seg.state === 'skipped' && seg.skip_reason && (
-                <p style={{ margin: 0, fontSize: 11, color: '#444', fontFamily: 'monospace' }}>
+                <p style={{ margin: 0, fontSize: 11, color: '#767676', fontFamily: 'monospace' }}>
                   skipped: {seg.skip_reason}
                 </p>
               )}

@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import UploadZone from '@/components/UploadZone';
 import PipelineView, { GapSegment, SegmentState } from '@/components/PipelineView';
 import Player from '@/components/Player';
-import { uploadVideo, createJob, getJob, JobResponse } from '@/lib/api';
+import AgentLane from '@/components/AgentLane';
+import { uploadVideo, createJob, getJob, JobResponse, fetchPeaks, PeaksData } from '@/lib/api';
 
 // Map pipeline status → SegmentState for each gap
 function statusToSegmentState(jobStatus: string): SegmentState {
@@ -49,7 +50,6 @@ function buildSegments(job: JobResponse, activeCueTime?: number): GapSegment[] {
   // No cue data yet — synthesise placeholder segments from gap_count
   const count = job.gap_count ?? 0;
   const state = statusToSegmentState(job.status);
-  // We don't have per-gap timing yet, so show equal-width placeholders
   const placeholderDuration = 5;
   return Array.from({ length: count }, (_, i) => ({
     gap_id: `gap_${String(i).padStart(3, '0')}`,
@@ -69,7 +69,9 @@ export default function Home() {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [error, setError] = useState('');
   const [currentTime, setCurrentTime] = useState<number | undefined>(undefined);
+  const [peaksData, setPeaksData] = useState<PeaksData | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const peaksFetchedRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -80,11 +82,19 @@ export default function Home() {
 
   const startPolling = useCallback((id: string) => {
     stopPolling();
-    const orchestratorUrl = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || 'http://localhost:8000';
     pollRef.current = setInterval(async () => {
       try {
         const data = await getJob(id);
         setJob(data);
+
+        // Fetch peaks once they arrive
+        if (data.peaks_uri && !peaksFetchedRef.current) {
+          peaksFetchedRef.current = true;
+          fetchPeaks(data.peaks_uri).then((p) => {
+            if (p) setPeaksData(p);
+          });
+        }
+
         if (data.status === 'done') {
           stopPolling();
           setAppState('done');
@@ -93,8 +103,6 @@ export default function Home() {
           setAppState('failed');
           setError(data.error ?? 'Pipeline failed.');
         }
-        // suppress unused variable warning
-        void orchestratorUrl;
       } catch {
         // ignore transient poll errors
       }
@@ -105,6 +113,8 @@ export default function Home() {
     setError('');
     setJob(null);
     setJobId(null);
+    setPeaksData(null);
+    peaksFetchedRef.current = false;
     setAppState('uploading');
 
     try {
@@ -169,7 +179,7 @@ export default function Home() {
 
       {/* Job metadata */}
       {jobId && (
-        <div style={{ marginTop: 24, fontSize: 12, color: '#555' }}>
+        <div style={{ marginTop: 24, fontSize: 12, color: '#767676' }}>
           <span>Job&nbsp;</span>
           <code style={{ color: '#888' }}>{jobId}</code>
           <span style={{ marginLeft: 12 }}>
@@ -181,9 +191,18 @@ export default function Home() {
         </div>
       )}
 
+      {/* Agent lane visualisation */}
+      {job && job.events && job.events.length > 0 && (
+        <AgentLane events={job.events} />
+      )}
+
       {/* Pipeline timeline */}
       {(appState === 'processing' || appState === 'done') && (
-        <PipelineView segments={segments} />
+        <PipelineView
+          segments={segments}
+          peaksData={peaksData}
+          currentTime={currentTime}
+        />
       )}
 
       {/* Player — appears when done */}
@@ -192,6 +211,8 @@ export default function Home() {
           videoUrl={job!.result_video_url!}
           vttUrl={job!.vtt_url!}
           onTimeUpdate={setCurrentTime}
+          segments={segments}
+          peaksData={peaksData}
         />
       )}
 
@@ -203,6 +224,8 @@ export default function Home() {
             setJob(null);
             setJobId(null);
             setError('');
+            setPeaksData(null);
+            peaksFetchedRef.current = false;
           }}
           style={{
             marginTop: 32,

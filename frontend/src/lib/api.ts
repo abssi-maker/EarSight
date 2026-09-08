@@ -20,15 +20,29 @@ export interface CueRecord {
   skip_reason?: string | null;
 }
 
+export interface PipelineEvent {
+  ts: number;
+  topic: string;
+  service: string;
+  direction: string;
+}
+
 export interface JobResponse {
   job_id: string;
   status: string;
   gap_count?: number | null;
   transcript_word_count?: number | null;
+  peaks_uri?: string | null;
   cues?: CueRecord[] | null;
+  events?: PipelineEvent[] | null;
   result_video_url?: string | null;
   vtt_url?: string | null;
   error?: string | null;
+}
+
+export interface PeaksData {
+  duration: number;
+  peaks: number[];
 }
 
 export async function uploadVideo(file: File): Promise<string> {
@@ -67,4 +81,16 @@ export async function getJob(jobId: string): Promise<JobResponse> {
     throw new Error(`GET /jobs/${jobId} ${res.status}`);
   }
   return res.json();
+}
+
+export async function fetchPeaks(peaksUri: string): Promise<PeaksData | null> {
+  // peaks_uri is a GCS signed URL or gs:// — proxy via our own API
+  try {
+    const proxyUrl = `/api/peaks?url=${encodeURIComponent(peaksUri)}`;
+    const res = await fetch(proxyUrl);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
