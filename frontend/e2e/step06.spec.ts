@@ -12,6 +12,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import path from 'path';
 import fs from 'fs';
 
@@ -19,6 +20,15 @@ const ORCHESTRATOR = 'http://localhost:8000';
 
 test.describe('Step 6 — EarSight frontend', () => {
   test.beforeEach(async ({ page }) => {
+    // Mock POST /upload
+    await page.route(`${ORCHESTRATOR}/upload`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ gcs_uri: 'gs://fake-bucket/jobs/test-job-001/video.mp4', upload_id: 'test-job-001' }),
+      });
+    });
+
     // Mock POST /jobs
     await page.route(`${ORCHESTRATOR}/jobs`, async (route) => {
       if (route.request().method() === 'POST') {
@@ -137,5 +147,19 @@ test.describe('Step 6 — EarSight frontend', () => {
     const focused = await page.evaluate(() => document.activeElement?.id ?? '');
     // Skip link or upload input should be reachable
     expect(['video-upload', '']).toContain(focused);
+  });
+
+  test('axe-core — no critical or serious violations on upload screen', async ({ page }) => {
+    await page.goto('/');
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    const criticals = results.violations.filter(
+      (v) => v.impact === 'critical' || v.impact === 'serious'
+    );
+    if (criticals.length > 0) {
+      console.error('axe violations:', JSON.stringify(criticals, null, 2));
+    }
+    expect(criticals).toHaveLength(0);
   });
 });

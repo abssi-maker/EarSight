@@ -81,7 +81,7 @@ export default function UploadZone({ onFile, disabled }: Props) {
           ? 'Drop to upload'
           : 'Drop a video. Hear everything.'}
         <br />
-        <span style={{ fontSize: 12, color: '#555', marginTop: 8, display: 'block' }}>
+        <span style={{ fontSize: 12, color: '#888', marginTop: 8, display: 'block' }}>
           .mp4 · max 90 seconds
         </span>
         <input

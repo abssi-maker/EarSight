@@ -160,7 +160,7 @@ export default function Home() {
         <h1 style={{ color: '#f5a623', fontSize: 28, letterSpacing: '0.06em', margin: '0 0 6px' }}>
           EARSIGHT
         </h1>
-        <p style={{ color: '#767676', fontSize: 14, margin: 0 }}>
+        <p style={{ color: '#8a8a8a', fontSize: 14, margin: 0 }}>
           Drop a video. Hear everything.
         </p>
       </header>
