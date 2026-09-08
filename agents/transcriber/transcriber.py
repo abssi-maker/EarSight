@@ -1,13 +1,11 @@
 """
-Transcriber agent.
+Transcriber agent — ADK LlmAgent pattern.
 
-Extracts audio from a video file and produces a word-level transcript
-using Gemini's audio understanding capability (gemini-3.8-flash).
+Uses google.adk LlmAgent + Runner for the audio-understanding call,
+consistent with the describer's ADK pattern. The audio file is uploaded
+via the Files API and passed as a Part.from_uri to the agent.
 
-Falls back through available models if the primary is overloaded.
-
-Input:  path to .mp4 video
-Output: Transcript dataclass with word-level timestamps
+Exposes the same public signature: transcribe(video_path) -> Transcript.
 """
 
 import json
@@ -19,6 +17,9 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,9 +28,31 @@ from agents.shared.models import Transcript, Word
 
 # Ordered preference — falls back if earlier model is overloaded
 GEMINI_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
+# ── Safety settings ────────────────────────────────────────────────────────────
+# Transcription of real speech content: harassment and hate-speech filters can
+# trigger on actual dialogue. Set explicit thresholds for predictable behaviour.
+_SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold=types.HarmBlockThreshold.BLOCK_NONE,
+    ),
 ]
 
 
@@ -55,28 +78,15 @@ def extract_audio(video_path: str, out_path: str) -> str:
     return out_path
 
 
-def transcribe(video_path: str) -> Transcript:
+import asyncio
+
+
+def _run_transcriber_agent(client: genai.Client, audio_uri: str) -> str:
     """
-    Transcribe a video file using Gemini audio understanding.
-    Returns a Transcript with word-level timestamps.
+    Run the transcription via ADK LlmAgent.
+    Returns the raw text from the agent's final response.
     """
-    client = _get_client()
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        audio_path = tmp.name
-
-    uploaded = None
-    try:
-        extract_audio(video_path, audio_path)
-        size_kb = Path(audio_path).stat().st_size // 1024
-        print(f"[transcriber] Uploading audio ({size_kb}KB)...")
-
-        uploaded = client.files.upload(
-            file=audio_path,
-            config=types.UploadFileConfig(mime_type="audio/wav"),
-        )
-
-        prompt = """Transcribe this audio with precise word-level timestamps.
+    prompt = """Transcribe this audio with precise word-level timestamps.
 
 Return ONLY valid JSON in this exact format — no markdown, no explanation:
 {
@@ -95,30 +105,131 @@ Rules:
 - Do not include non-speech sounds as words
 """
 
-        print("[transcriber] Requesting transcription from Gemini...")
-        response = None
-        last_err = None
-        for attempt, model in enumerate(GEMINI_MODELS):
-            try:
-                if attempt > 0:
-                    time.sleep(2)
-                print(f"[transcriber] Trying model: {model}")
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[
-                        types.Part.from_uri(file_uri=uploaded.uri, mime_type="audio/wav"),
-                        types.Part.from_text(text=prompt),
-                    ],
-                )
-                break
-            except Exception as e:
-                print(f"[transcriber] {model} failed: {str(e)[:80]}")
-                last_err = e
-        if response is None:
-            raise RuntimeError(f"All models failed. Last error: {last_err}")
-        raw = response.text.strip()
+    model_name = GEMINI_MODELS[0]
 
-        # Strip markdown code fences if present
+    agent = LlmAgent(
+        name="transcriber",
+        model=model_name,
+        instruction=prompt,
+        generate_content_config=types.GenerateContentConfig(
+            safety_settings=_SAFETY_SETTINGS,
+        ),
+    )
+
+    session_service = InMemorySessionService()
+    runner = Runner(
+        app_name="earsight_transcriber",
+        agent=agent,
+        session_service=session_service,
+    )
+
+    async def _run():
+        session = await session_service.create_session(
+            app_name="earsight_transcriber",
+            user_id="system",
+        )
+        events = []
+        async for event in runner.run_async(
+            user_id="system",
+            session_id=session.id,
+            new_message=types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_uri(file_uri=audio_uri, mime_type="audio/wav"),
+                    types.Part.from_text(text="Transcribe the audio above."),
+                ],
+            ),
+        ):
+            events.append(event)
+        for event in reversed(events):
+            if hasattr(event, "content") and event.content:
+                for part in event.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        return part.text
+        return None
+
+    try:
+        return asyncio.run(_run())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_run())
+        finally:
+            loop.close()
+
+
+def transcribe(video_path: str) -> Transcript:
+    """
+    Transcribe a video file using Gemini audio understanding via ADK LlmAgent.
+    Returns a Transcript with word-level timestamps.
+    Falls back to direct generate_content if the ADK runner fails.
+    """
+    client = _get_client()
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        audio_path = tmp.name
+
+    uploaded = None
+    try:
+        extract_audio(video_path, audio_path)
+        size_kb = Path(audio_path).stat().st_size // 1024
+        print(f"[transcriber] Uploading audio ({size_kb}KB)...")
+
+        uploaded = client.files.upload(
+            file=audio_path,
+            config=types.UploadFileConfig(mime_type="audio/wav"),
+        )
+
+        print("[transcriber] Requesting transcription via ADK agent...")
+        raw = None
+
+        # ADK path
+        try:
+            raw = _run_transcriber_agent(client, uploaded.uri)
+        except Exception as exc:
+            print(f"[transcriber] ADK path failed: {exc} — falling back to direct generate")
+
+        # Fallback: direct model ladder
+        if raw is None:
+            last_err = None
+            response = None
+            prompt = """Transcribe this audio with precise word-level timestamps.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{"language": "en", "words": [{"word": "Hello", "start": 0.12, "end": 0.45}], "full_text": "Hello world"}
+
+Rules:
+- Include every word with start/end time in seconds
+- If no speech: {"language": "en", "words": [], "full_text": ""}
+- Do not include non-speech sounds
+"""
+            for attempt, model in enumerate(GEMINI_MODELS):
+                try:
+                    if attempt > 0:
+                        time.sleep(2)
+                    print(f"[transcriber] Trying model: {model}")
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[
+                            types.Part.from_uri(file_uri=uploaded.uri, mime_type="audio/wav"),
+                            types.Part.from_text(text=prompt),
+                        ],
+                        config=types.GenerateContentConfig(
+                            safety_settings=_SAFETY_SETTINGS,
+                        ),
+                    )
+                    raw = response.text
+                    break
+                except Exception as e:
+                    print(f"[transcriber] {model} failed: {str(e)[:80]}")
+                    last_err = e
+            if raw is None:
+                raise RuntimeError(f"All models failed. Last error: {last_err}")
+
+        if raw is None:
+            raise RuntimeError("Transcription returned no text")
+
+        raw = raw.strip()
         if raw.startswith("```"):
             lines = raw.split("\n")
             raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])

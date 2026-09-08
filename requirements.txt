@@ -1,5 +1,5 @@
 google-genai>=0.8
-google-cloud-aiplatform>=1.60
+google-cloud-aiplatform[agent_engines,adk]>=1.101.0
 confluent-kafka>=2.4
 fastapi>=0.111
 uvicorn[standard]>=0.29
