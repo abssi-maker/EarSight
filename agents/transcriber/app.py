@@ -41,7 +41,7 @@ def _generate_peaks(video_path: str, tmpdir: str) -> tuple[float, list[float]]:
     pcm_path = os.path.join(tmpdir, "peaks.wav")
     subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
-         "-vn", "-ac", "1", "-ar", "1000", "-sample_fmt", "u8", "-f", "wav", pcm_path],
+         "-vn", "-ac", "1", "-ar", "1000", "-c:a", "pcm_u8", "-f", "wav", pcm_path],
         check=True, capture_output=True,
     )
 
@@ -104,8 +104,9 @@ def _handle(msg: dict) -> None:
             peaks_uri = make_uri(job_id, "peaks.json")
             upload_json({"duration": duration, "peaks": peaks}, peaks_uri)
             print(f"[transcriber] peaks uploaded → {peaks_uri} ({duration:.1f}s, {PEAKS_COUNT} buckets)")
-        except Exception as exc:
-            print(f"[transcriber] peaks generation failed (non-fatal): {exc}")
+        except Exception:
+            import traceback
+            print(f"[transcriber] peaks generation failed (non-fatal):\n{traceback.format_exc()}")
 
     # Publish to earsight.transcript
     producer = get_producer()
