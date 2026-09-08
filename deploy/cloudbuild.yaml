@@ -60,7 +60,7 @@ steps:
       - '--no-cpu-throttling'
       - '--min-instances=1'
       - '--set-env-vars'
-      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION},FRONTEND_URL=https://earsight-frontend-xc3lx35vha-uc.a.run.app,https://earsight-frontend-131214399019.us-central1.run.app'
+      - '^@^GOOGLE_CLOUD_PROJECT=$PROJECT_ID@GOOGLE_CLOUD_LOCATION=${_REGION}@FRONTEND_URL=https://earsight-frontend-xc3lx35vha-uc.a.run.app,https://earsight-frontend-131214399019.us-central1.run.app'
       - '--set-secrets'
       - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
