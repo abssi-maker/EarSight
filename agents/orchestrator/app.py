@@ -220,6 +220,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="EarSight Orchestrator", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o for o in os.environ.get("FRONTEND_URL", "").split(",") if o] or ["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── Request / Response models ─────────────────────────────────────────────────
 class JobRequest(BaseModel):
