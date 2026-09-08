@@ -16,11 +16,12 @@ Enable with EARSIGHT_USE_CACHE=1.
 
 import functools
 import hashlib
+import inspect
 import json
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional, Sequence
 
 
 _CACHE_DIR = Path(os.environ.get("EARSIGHT_CACHE_DIR", "demo/cache"))
@@ -33,11 +34,23 @@ def _key(*args, **kwargs) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def cached(namespace: str) -> Callable:
+def _key_from_selected(fn: Callable, args: tuple, kwargs: dict, key_args: Sequence[str]) -> str:
+    """Build a cache key from only the named parameters listed in key_args."""
+    sig = inspect.signature(fn)
+    bound = sig.bind(*args, **kwargs)
+    bound.apply_defaults()
+    selected = {name: bound.arguments[name] for name in key_args if name in bound.arguments}
+    raw = json.dumps(selected, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def cached(namespace: str, key_args: Optional[Sequence[str]] = None) -> Callable:
     """
     Decorator that caches the return value of a function to disk.
 
-    The cache is keyed by the function's arguments.
+    key_args: if provided, only these named parameters participate in the cache key.
+              Use this to exclude arguments (e.g. a client object) whose repr is
+              non-deterministic across processes.
     Only active when EARSIGHT_USE_CACHE=1.
     """
     def decorator(fn: Callable) -> Callable:
@@ -48,7 +61,10 @@ def cached(namespace: str) -> Callable:
 
             cache_dir = _CACHE_DIR / namespace
             cache_dir.mkdir(parents=True, exist_ok=True)
-            key = _key(*args, **kwargs)
+            if key_args is not None:
+                key = _key_from_selected(fn, args, kwargs, key_args)
+            else:
+                key = _key(*args, **kwargs)
             cache_file = cache_dir / f"{key}.pkl"
 
             if cache_file.exists():

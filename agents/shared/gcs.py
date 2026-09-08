@@ -5,6 +5,7 @@ Uses google-cloud-storage. Credentials come from the environment:
   GOOGLE_APPLICATION_CREDENTIALS or ADC (Application Default Credentials).
 """
 
+import datetime
 import json
 import os
 from pathlib import Path
@@ -68,3 +69,20 @@ def make_uri(job_id: str, filename: str) -> str:
     """Build a GCS URI for a job artefact: gs://BUCKET/jobs/{job_id}/{filename}."""
     bucket = os.environ["GCS_BUCKET"]
     return f"gs://{bucket}/jobs/{job_id}/{filename}"
+
+
+def signed_url(gcs_uri: str, hours: int = 6) -> str:
+    """
+    Generate a signed HTTPS URL for a GCS object, valid for `hours` hours.
+    The calling identity must have the iam.serviceAccounts.signBlob permission.
+    """
+    bucket_name, blob_name = _parse_gcs_uri(gcs_uri)
+    client = _client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    url = blob.generate_signed_url(
+        expiration=datetime.timedelta(hours=hours),
+        method="GET",
+        version="v4",
+    )
+    return url

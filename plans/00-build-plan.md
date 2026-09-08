@@ -193,9 +193,9 @@ persisted to GCS and signalled over topics.
 
 ### Step 4 — Describer agent: salience scoring + copy writing
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-07 (commit 79ff23c)`
 
-**Intent**  
+**Intent**
 The describer is the intellectual centre of the system. It consumes the transcript
 and frames, decides what is worth saying in each gap, and produces copy that fits
 the word budget. This is where the salience decision (§5) is made.
@@ -235,9 +235,9 @@ and threaded through the copy pass to enforce the redundancy rule.
 
 ### Step 5 — Synthesiser + mixer over Kafka, full audio output
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — 2025-09-07 (commit ad9e206)`
 
-**Intent**  
+**Intent**
 Complete the audio pipeline end-to-end over Kafka. After this step, submitting a
 job via the API returns a GCS URI for the mixed audio track and the VTT file.
 No UI yet — this is a `curl`-driven end-to-end test.
@@ -312,7 +312,7 @@ being placed on a timeline. The UI must pass the screen-reader test (§3).
 
 ### Step 7 — Resilience, reset script, and demo cache
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — final session (Phase 3)`
 
 **Intent**  
 Make the demo reliable. Partial failure should not produce a stack trace — a job
@@ -345,7 +345,7 @@ live quota.
 
 ### Step 8 — Bob evidence trail + README completion
 
-**Status:** `[ ] pending`
+**Status:** `[x] done — final session (Phase 4)`
 
 **Intent**  
 Ensure the repository reads as an auditable IBM Bob build to a judge who has never

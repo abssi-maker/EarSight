@@ -10,6 +10,7 @@ Two-pass approach:
 No cue that would exceed its budget or collide with dialogue is ever written.
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agents.shared.budget import word_budget, fits_budget, count_words
+from agents.shared.cache import cached
 from agents.shared.collision import assert_no_collision
 from agents.shared.models import Transcript, Gap, Cue
 
@@ -59,6 +61,24 @@ def _generate(client: genai.Client, contents) -> object:
             print(f"[describer] {model} failed: {str(e)[:80]}")
             last_err = e
     raise RuntimeError(f"All models failed: {last_err}")
+
+
+@cached("describe", key_args=("prompt", "media_sha256"))
+def _cached_generate(client: genai.Client, prompt: str, media_sha256: str, media_bytes: Optional[bytes], media_mime: Optional[str]) -> str:
+    """
+    Cache-aware wrapper around _generate.
+    Keyed on prompt text + sha256 of any attached media bytes.
+    The client object is excluded from the key (non-deterministic repr).
+    """
+    if media_bytes:
+        parts = [
+            types.Part.from_bytes(data=media_bytes, mime_type=media_mime or "image/jpeg"),
+            types.Part.from_text(text=prompt),
+        ]
+    else:
+        parts = prompt
+    resp = _generate(client, parts)
+    return resp.text
 
 
 def describe_gaps(
@@ -124,8 +144,7 @@ List ALL gaps (include: true or false). Rank by importance (1 = most important).
 """
 
     print("[describer] Pass 1: ranking gaps for salience...")
-    response1 = _generate(client, pass1_prompt)
-    raw1 = response1.text.strip()
+    raw1 = _cached_generate(client, pass1_prompt, "", None, None).strip()
     if raw1.startswith("```"):
         lines = raw1.split("\n")
         raw1 = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
@@ -138,8 +157,6 @@ List ALL gaps (include: true or false). Rank by importance (1 = most important).
     cues: list[Cue] = []
 
     # Sort by timeline order, not priority (cues must be in time order)
-    gap_map = {g.gap_id: g for g in gaps}
-
     for gap in sorted(gaps, key=lambda g: g.start):
         decision = ranking.get(gap.gap_id, {})
         budget = word_budget(gap.duration)
@@ -168,19 +185,17 @@ List ALL gaps (include: true or false). Rank by importance (1 = most important).
             print(f"[describer] {gap.gap_id}: SKIP (salience — {decision.get('rationale', '')})")
             continue
 
-        # Build copy-writing prompt with frame image if available
-        content_parts: list[types.Part] = []
-
+        # Build copy-writing prompt; load frame bytes for cache key
+        media_bytes: Optional[bytes] = None
+        media_mime: Optional[str] = None
         if gap.frame_path and Path(gap.frame_path).exists():
             try:
-                content_parts.append(
-                    types.Part.from_bytes(
-                        data=Path(gap.frame_path).read_bytes(),
-                        mime_type="image/jpeg",
-                    )
-                )
+                media_bytes = Path(gap.frame_path).read_bytes()
+                media_mime = "image/jpeg"
             except Exception:
                 pass
+
+        media_sha256 = hashlib.sha256(media_bytes).hexdigest() if media_bytes else ""
 
         facts_str = json.dumps(established_facts) if established_facts else "[]"
         copy_prompt = f"""You are writing one audio description cue for a short video.
@@ -191,7 +206,7 @@ Dialogue before: "{gap.preceding_context}"
 Dialogue after:  "{gap.following_context}"
 Facts already established: {facts_str}
 
-{"[Frame from video at the midpoint of this gap is attached above]" if content_parts else "[No frame available]"}
+{"[Frame from video at the midpoint of this gap is attached above]" if media_bytes else "[No frame available]"}
 
 Write ONE description cue. Rules:
 - MUST be {budget} words or fewer — this is a hard limit, not a guide
@@ -207,11 +222,8 @@ or if nothing worth describing:
 {{"text": null, "reason": "brief explanation"}}
 """
 
-        content_parts.append(types.Part.from_text(text=copy_prompt))
-
         print(f"[describer] {gap.gap_id}: writing copy (budget={budget} words)...")
-        response2 = _generate(client, content_parts)
-        raw2 = response2.text.strip()
+        raw2 = _cached_generate(client, copy_prompt, media_sha256, media_bytes, media_mime).strip()
         if raw2.startswith("```"):
             lines = raw2.split("\n")
             raw2 = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])

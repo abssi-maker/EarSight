@@ -109,13 +109,7 @@ export default function Home() {
 
     try {
       // Upload video to GCS via orchestrator /upload
-      let gcsUri: string;
-      try {
-        gcsUri = await uploadVideo(file);
-      } catch {
-        // Fallback: orchestrator may not have /upload yet — pass filename stub
-        gcsUri = `local://${file.name}`;
-      }
+      const gcsUri = await uploadVideo(file);
 
       const created = await createJob({ video_uri: gcsUri, label: file.name });
       setJobId(created.job_id);
@@ -156,8 +150,8 @@ export default function Home() {
         <h1 style={{ color: '#f5a623', fontSize: 28, letterSpacing: '0.06em', margin: '0 0 6px' }}>
           EARSIGHT
         </h1>
-        <p style={{ color: '#555', fontSize: 14, margin: 0 }}>
-          Audio description for video · powered by Gemini
+        <p style={{ color: '#767676', fontSize: 14, margin: 0 }}>
+          Drop a video. Hear everything.
         </p>
       </header>
 

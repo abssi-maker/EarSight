@@ -1,9 +1,13 @@
 """
 Synthesiser agent.
 
-Converts cue text to speech using Gemini Flash TTS (gemini-2.5-flash-preview-tts)
-via the google-genai SDK — the same SDK used throughout the pipeline.
+Converts cue text to speech using Gemini Flash TTS via the google-genai SDK —
+the same SDK used throughout the pipeline.
 Produces one WAV audio clip per cue, trimmed to fit the gap duration.
+
+Note: output audio carries a SynthID watermark applied by Google. For an
+accessibility tool that generates synthetic narration, this is a feature:
+it transparently identifies AI-generated speech.
 
 Input:  list of Cue objects
 Output: Cue objects with audio_path set
@@ -12,6 +16,7 @@ Output: Cue objects with audio_path set
 import os
 import subprocess
 import tempfile
+import time as _time
 import wave
 from pathlib import Path
 from typing import Optional
@@ -26,39 +31,43 @@ from agents.shared.models import Cue
 from agents.shared.cache import cached
 
 
-# Voice: Puck is a clear, neutral narration voice available in Flash TTS
+# Voice: Puck is available in all Flash TTS model versions
 TTS_VOICE = "Puck"
 
-# Model names differ between Vertex AI and the public Gemini API
-_TTS_MODEL_VERTEX = "gemini-2.5-flash-tts"
-_TTS_MODEL_APIKEY = "gemini-2.5-flash-preview-tts"
+# Style directive prepended to every TTS input.
+# The <calm> and <neutral> tags are supported expressive audio tags in
+# gemini-3.1-flash-tts-preview and activate documentary-neutral delivery
+# appropriate for professional audio description.
+_STYLE_PREFIX = (
+    "<calm><neutral>Professional audio description narration. "
+    "Calm, even, documentary tone. No performance.</neutral></calm> "
+)
+
+# Model fallback ladder — try in order; each tier has a different allowlist
+_TTS_MODELS = [
+    "gemini-3.1-flash-tts-preview",   # public preview; highest quality
+    "gemini-2.5-flash-tts",           # Vertex AI fallback
+    "gemini-2.5-flash-preview-tts",   # API-key fallback
+]
 
 
-def _client() -> tuple[genai.Client, str]:
-    """
-    Return (client, tts_model_name).
-    Uses Vertex AI (ADC) when GOOGLE_CLOUD_PROJECT is set; falls back to API key.
-    """
+def _client() -> genai.Client:
+    """Return a genai Client using Vertex AI (ADC) or API key."""
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if project:
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-        return (
-            genai.Client(vertexai=True, project=project, location=location),
-            _TTS_MODEL_VERTEX,
-        )
-    return (
-        genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ["GEMINI_API_KEY"]),
-        _TTS_MODEL_APIKEY,
-    )
+        return genai.Client(vertexai=True, project=project, location=location)
+    return genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ["GEMINI_API_KEY"])
 
 
-@cached("tts")
+@cached("tts", key_args=("model", "text"))
 def _tts_call(client: genai.Client, model: str, text: str) -> bytes:
     """
     Call Gemini Flash TTS and return raw PCM bytes.
-    Wrapped with @cached so EARSIGHT_USE_CACHE=1 replays from disk.
-    Cache key is derived from (client, model, text); client serialises
-    to its class name via default=str, so cache is effectively keyed on text.
+    Wrapped with @cached(key_args=("model","text")) so the client object
+    (whose repr contains a non-deterministic memory address) is excluded
+    from the cache key — the eight committed demo/cache/tts/*.pkl files
+    are therefore reused correctly across processes.
     """
     response = client.models.generate_content(
         model=model,
@@ -77,11 +86,24 @@ def _tts_call(client: genai.Client, model: str, text: str) -> bytes:
     return response.candidates[0].content.parts[0].inline_data.data
 
 
+def _tts_with_ladder(client: genai.Client, text: str) -> bytes:
+    """Try each model in _TTS_MODELS, returning PCM bytes from the first that succeeds."""
+    last_err = None
+    for attempt, model in enumerate(_TTS_MODELS):
+        try:
+            if attempt > 0:
+                _time.sleep(2)
+            return _tts_call(client, model, text)
+        except Exception as exc:
+            print(f"[synthesiser] {model} failed: {str(exc)[:80]}")
+            last_err = exc
+    raise RuntimeError(f"All TTS models failed: {last_err}")
+
+
 def synthesise_cue(
     cue: Cue,
     output_dir: str,
     client: Optional[genai.Client] = None,
-    tts_model: Optional[str] = None,
 ) -> Optional[str]:
     """
     Synthesise a single cue to a WAV file using Gemini Flash TTS.
@@ -91,16 +113,15 @@ def synthesise_cue(
         return None
 
     if client is None:
-        client, tts_model = _client()
-    elif tts_model is None:
-        _, tts_model = _client()
+        client = _client()
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     out_path = str(Path(output_dir) / f"{cue.cue_id}.wav")
 
     print(f"[synthesiser] {cue.cue_id}: synthesising '{cue.text}'")
 
-    audio_data = _tts_call(client, tts_model, cue.text)
+    tts_input = _STYLE_PREFIX + cue.text
+    audio_data = _tts_with_ladder(client, tts_input)
 
     # Write as WAV (Gemini Flash TTS returns 24 kHz, 16-bit, mono PCM)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -139,12 +160,12 @@ def synthesise_cues(
     Mutates cues in place, setting cue.audio_path.
     Returns the updated cue list.
     """
-    client, tts_model = _client()
+    client = _client()
 
     for cue in cues:
         if cue.text is None:
             continue
-        audio_path = synthesise_cue(cue, output_dir, client, tts_model)
+        audio_path = synthesise_cue(cue, output_dir, client)
         cue.audio_path = audio_path
 
     return cues
