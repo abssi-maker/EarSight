@@ -80,8 +80,9 @@ def _handle(msg: dict) -> None:
         # ── Load established facts (GCS-backed) ────────────────────────────────
         established_facts = facts_memory.load(job_id)
 
-        # ── Run two-pass describer ─────────────────────────────────────────────
-        cues = describe_gaps(transcript, gaps, established_facts)
+        # ── Run single-call describer ──────────────────────────────────────────
+        video_uri = make_uri(job_id, "video.mp4")
+        cues = describe_gaps(transcript, gaps, established_facts, video_gcs_uri=video_uri)
 
         # ── Hard-assert all constraints before publishing ─────────────────────
         active_cues = [c for c in cues if c.text is not None]

@@ -2,17 +2,13 @@
 Describer agent — ADK LlmAgent with forced budget/collision guards.
 
 Architecture:
-- describe_gaps() is the public entry point; agents/describer/app.py:84 calls it unchanged.
-- Internally uses google.adk LlmAgent + Runner for both passes.
-- Pass 1 (salience): plain generate_content through the fallback ladder.
-- Pass 2 (copy writing): ADK LlmAgent with check_budget and check_collision as forced
-  function tools (tool_config mode=ANY). The model MUST call one of the guard tools
-  before it may emit a cue — forcing it to see its headroom before committing.
-- A3: native video understanding — the copy pass receives a gs:// video clip via
-  types.Part.from_uri with VideoMetadata start_offset/end_offset for the gap window.
-  Still-frame fallback is kept for the case where gs_uri is not available.
-- Post-generation asserts in app.py are kept. The tools let the model self-correct;
-  the asserts remain the hard guarantee. Belt and braces.
+- describe_gaps() is the public entry point; agents/describer/app.py calls it.
+- Single ADK LlmAgent invocation: the whole video is attached once, all gaps are
+  described in one prompt, the model calls check_budget / check_collision per candidate
+  cue inside that one invocation (tool_config mode=ANY is kept — forced function calling
+  is deliberate).
+- Still-frame fallback (per-gap _cached_generate) when video_gcs_uri is None.
+- Post-generation asserts in app.py remain the hard guarantee. Belt and braces.
 """
 
 import asyncio
@@ -161,21 +157,20 @@ def check_collision(start: float, end: float, dialogue_spans_json: str) -> dict:
     return {"collides": False, "overlapping_span": None}
 
 
-def _run_adk_copy_pass(
+def _run_adk_all_gaps(
     prompt: str,
-    gap_seconds: float,
     dialogue_spans_json: str,
+    video_part: Optional[types.Part],
 ) -> Optional[str]:
     """
-    Run the copy-writing pass via ADK LlmAgent with forced guard tools.
+    Single ADK LlmAgent invocation that describes all gaps at once.
 
-    The agent must call check_budget (and optionally check_collision) before
-    emitting its final JSON. We use tool_config mode=ANY with
-    allowed_function_names so the model cannot skip the checks.
+    The video (if provided) is attached once. The model calls check_budget and
+    check_collision per candidate cue inside this one invocation (tool_config
+    mode=ANY — forced function calling is kept intentionally).
 
     Returns the raw text from the agent's final message, or None on failure.
     """
-    # Bind dialogue context into check_collision via closure
     def _check_collision(start: float, end: float) -> dict:
         """Check whether cue [start, end] overlaps any dialogue span."""
         return check_collision(start, end, dialogue_spans_json)
@@ -214,14 +209,17 @@ def _run_adk_copy_pass(
             app_name="earsight_describer",
             user_id="system",
         )
+        # Attach video once at the top of the user message if available
+        user_parts = []
+        if video_part is not None:
+            user_parts.append(video_part)
+        user_parts.append(types.Part.from_text(text="Write description cues for all gaps now."))
+
         events = []
         async for event in runner.run_async(
             user_id="system",
             session_id=session.id,
-            new_message=types.Content(
-                role="user",
-                parts=[types.Part.from_text(text="Write the description cue now.")],
-            ),
+            new_message=types.Content(role="user", parts=user_parts),
         ):
             events.append(event)
         # Extract the last model text response
@@ -235,7 +233,6 @@ def _run_adk_copy_pass(
     try:
         return asyncio.run(_run())
     except RuntimeError:
-        # Already inside an event loop (e.g. during tests)
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(_run())
@@ -250,27 +247,31 @@ def describe_gaps(
     video_gcs_uri: Optional[str] = None,
 ) -> list[Cue]:
     """
-    Run the two-pass describer on a list of gaps.
+    Describe all gaps in a single ADK agent invocation.
     Returns a list of Cue objects (some with text=None for skipped gaps).
 
-    video_gcs_uri: if provided, pass the source video to the copy pass via
-    native video understanding (A3) with VideoMetadata offsets for each gap
-    window, instead of a still frame. Still frames are used as fallback.
+    video_gcs_uri: if provided the whole video is attached once via
+    types.Part.from_uri (no VideoMetadata offsets — the model sees the entire
+    clip and is instructed to focus on each gap's time window). Still-frame
+    fallback (one _cached_generate per gap) is used when video_gcs_uri is None.
     """
+    import re
+
     client = _get_client()
 
     if established_facts is None:
         established_facts = []
 
-    # Precompute dialogue spans for collision checking
     dialogue_spans = transcript.dialogue_spans()
     dialogue_spans_json = json.dumps(dialogue_spans)
+    facts_str = json.dumps(established_facts) if established_facts else "[]"
 
-    # ── PASS 1: Priority ranking ───────────────────────────────────────────────
-    gaps_summary = []
-    for g in gaps:
+    # Build the gap table for the prompt
+    gaps_sorted = sorted(gaps, key=lambda g: g.start)
+    gaps_table = []
+    for g in gaps_sorted:
         budget = word_budget(g.duration)
-        gaps_summary.append({
+        gaps_table.append({
             "gap_id": g.gap_id,
             "start": round(g.start, 2),
             "end": round(g.end, 2),
@@ -280,55 +281,134 @@ def describe_gaps(
             "following_dialogue": g.following_context,
         })
 
-    pass1_prompt = f"""You are writing audio description for a short video — narration spoken
-in the silences between dialogue for blind and low-vision viewers.
+    # ── VIDEO PATH (single ADK call) ───────────────────────────────────────────
+    if video_gcs_uri:
+        try:
+            video_part: Optional[types.Part] = types.Part.from_uri(
+                file_uri=video_gcs_uri,
+                mime_type="video/mp4",
+            )
+        except Exception as exc:
+            print(f"[describer] video part failed: {exc} — falling back to still frames")
+            video_part = None
+    else:
+        video_part = None
+
+    if video_part is not None:
+        all_gaps_prompt = f"""You are writing audio descriptions for a short video —
+narration spoken in the silences between dialogue for blind and low-vision viewers.
+The video is attached. Do NOT add VideoMetadata offsets; you see the full clip.
 
 Full transcript:
 {transcript.full_text or "(no dialogue)"}
 
-Silence gaps available for description:
-{json.dumps(gaps_summary, indent=2)}
+Facts already established (do not repeat):
+{facts_str}
 
-Facts already established in earlier cues (do not repeat these):
-{json.dumps(established_facts) if established_facts else "[]"}
+Silence gaps to describe:
+{json.dumps(gaps_table, indent=2)}
 
-For each gap, decide: would a blind viewer lose meaningful story information
-without a description here? Apply these rules:
-- Skip gaps whose budget is fewer than 3 words (not enough to say anything useful)
-- Skip gaps where the surrounding dialogue already conveys the scene
-- Skip gaps describing things the audio already makes clear (doors slamming, music, etc.)
-- Skip gaps that would repeat established facts
+For EACH gap:
+1. Call check_budget(text, gap_seconds) before finalising any cue text.
+2. Optionally call check_collision(start, end) to verify no overlap with dialogue.
+3. Focus only on what is visible in that gap's time window [start, end].
+4. Skip a gap (text=null) if: budget < 3 words, dialogue already conveys the scene,
+   the audio makes it clear, or it would repeat an established fact.
 
-Return ONLY valid JSON — no markdown, no explanation:
-{{
-  "ranked_gaps": [
-    {{
-      "gap_id": "gap_000",
-      "priority": 1,
-      "include": true,
-      "rationale": "one sentence reason"
-    }}
-  ]
-}}
+After all guard-tool calls, return ONLY a JSON array — no markdown, no explanation:
+[
+  {{"gap_id": "gap_000", "text": "A woman in a red coat crosses the platform.", "skip_reason": null}},
+  {{"gap_id": "gap_001", "text": null, "skip_reason": "dialogue conveys scene"}}
+]
 
-List ALL gaps (include: true or false). Rank by importance (1 = most important).
+Rules per cue:
+- text MUST fit within word_budget — hard limit, not a guide
+- Present tense, active voice, specific and visual
+- Never mention camera angles or filmmaking
+- Never repeat an established fact
 """
 
-    print("[describer] Pass 1: ranking gaps for salience...")
-    raw1 = _cached_generate(client, pass1_prompt, "", None, None).strip()
-    if raw1.startswith("```"):
-        lines = raw1.split("\n")
-        raw1 = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    ranking_data = json.loads(raw1)
+        print(f"[describer] single ADK call — {len(gaps_sorted)} gaps, video attached once")
+        _t0 = _time.time()
+        raw = None
+        try:
+            raw = _run_adk_all_gaps(all_gaps_prompt, dialogue_spans_json, video_part)
+        except Exception as exc:
+            print(f"[describer] ADK call failed: {exc} — falling back to still frames")
+            video_part = None  # trigger still-frame fallback below
 
-    # Build lookup: gap_id → ranking decision
-    ranking = {r["gap_id"]: r for r in ranking_data.get("ranked_gaps", [])}
+        if raw is not None:
+            raw = raw.strip()
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
-    # ── PASS 2: Copy writing via ADK agent with guard tools ────────────────────
-    cues: list[Cue] = []
+            try:
+                results = json.loads(raw)
+            except json.JSONDecodeError:
+                m = re.search(r'\[.*\]', raw, re.DOTALL)
+                if m:
+                    try:
+                        results = json.loads(m.group())
+                    except json.JSONDecodeError:
+                        results = None
+                else:
+                    results = None
 
-    for gap in sorted(gaps, key=lambda g: g.start):
-        decision = ranking.get(gap.gap_id, {})
+            if results is not None:
+                result_map = {r["gap_id"]: r for r in results}
+                cues: list[Cue] = []
+                for gap in gaps_sorted:
+                    budget = word_budget(gap.duration)
+                    r = result_map.get(gap.gap_id, {})
+                    text = r.get("text")
+                    skip_reason = r.get("skip_reason")
+
+                    if text is None:
+                        reason = skip_reason or "salience"
+                        cues.append(Cue(
+                            cue_id=f"cue_{gap.gap_id}",
+                            start=gap.start, end=gap.end,
+                            text=None, gap_id=gap.gap_id, skip_reason=reason,
+                        ))
+                        print(f"[describer] {gap.gap_id}: SKIP ({reason})")
+                        continue
+
+                    # Hard budget check in Python
+                    wc = count_words(text)
+                    if wc > budget:
+                        print(f"[describer] {gap.gap_id}: SKIP (copy exceeded budget: {wc} > {budget})")
+                        cues.append(Cue(
+                            cue_id=f"cue_{gap.gap_id}",
+                            start=gap.start, end=gap.end,
+                            text=None, gap_id=gap.gap_id, skip_reason="budget",
+                        ))
+                        continue
+
+                    # Collision guard
+                    candidate_cue = {"start": gap.start, "end": gap.end, "text": text}
+                    assert_no_collision([candidate_cue], dialogue_spans)
+
+                    established_facts.append(text)
+                    cue = Cue(
+                        cue_id=f"cue_{gap.gap_id}",
+                        start=gap.start, end=gap.end,
+                        text=text, word_count=wc, gap_id=gap.gap_id,
+                    )
+                    cues.append(cue)
+                    print(f"[describer] {gap.gap_id}: ✓ '{text}' ({wc}/{budget} words)")
+
+                print(f"[describer] single-call pass done in {_time.time()-_t0:.1f}s")
+                return cues
+
+            # JSON parse failed — fall through to still-frame path
+            print("[describer] could not parse single-call response — falling back to still frames")
+            video_part = None
+
+    # ── STILL-FRAME FALLBACK (video_gcs_uri is None or video_part failed) ──────
+    print(f"[describer] still-frame path — {len(gaps_sorted)} gaps")
+    cues = []
+    for gap in gaps_sorted:
         budget = word_budget(gap.duration)
 
         if budget < 3:
@@ -340,35 +420,9 @@ List ALL gaps (include: true or false). Rank by importance (1 = most important).
             print(f"[describer] {gap.gap_id}: SKIP (budget={budget} < 3)")
             continue
 
-        if not decision.get("include", False):
-            cues.append(Cue(
-                cue_id=f"cue_{gap.gap_id}",
-                start=gap.start, end=gap.end,
-                text=None, gap_id=gap.gap_id, skip_reason="salience",
-            ))
-            print(f"[describer] {gap.gap_id}: SKIP (salience — {decision.get('rationale', '')})")
-            continue
-
-        # ── A3: Build media context — prefer GCS video clip, fall back to frame ──
         media_bytes: Optional[bytes] = None
         media_mime: Optional[str] = None
-        video_part: Optional[types.Part] = None
-
-        if video_gcs_uri:
-            try:
-                video_part = types.Part.from_uri(
-                    file_uri=video_gcs_uri,
-                    mime_type="video/mp4",
-                    video_metadata=types.VideoMetadata(
-                        start_offset=f"{gap.start:.3f}s",
-                        end_offset=f"{gap.end:.3f}s",
-                    ),
-                )
-            except Exception as exc:
-                print(f"[describer] video part failed for {gap.gap_id}: {exc}")
-                video_part = None
-
-        if video_part is None and gap.frame_path and Path(gap.frame_path).exists():
+        if gap.frame_path and Path(gap.frame_path).exists():
             try:
                 media_bytes = Path(gap.frame_path).read_bytes()
                 media_mime = "image/jpeg"
@@ -376,37 +430,29 @@ List ALL gaps (include: true or false). Rank by importance (1 = most important).
                 pass
 
         media_sha256 = hashlib.sha256(media_bytes).hexdigest() if media_bytes else ""
-        # Include gap timing in cache key when using video (offsets make it unique)
-        if video_part:
-            media_sha256 = hashlib.sha256(
-                f"{video_gcs_uri}:{gap.start:.3f}:{gap.end:.3f}".encode()
-            ).hexdigest()
-
-        facts_str = json.dumps(established_facts) if established_facts else "[]"
+        facts_str_cur = json.dumps(established_facts) if established_facts else "[]"
         media_label = (
-            "[Source video clip for this gap is attached]" if video_part
-            else "[Frame from video at the midpoint of this gap is attached above]" if media_bytes
+            "[Frame from video at the midpoint of this gap is attached above]" if media_bytes
             else "[No visual context available]"
         )
 
         copy_prompt = f"""You are writing one audio description cue for a short video.
-IMPORTANT: You must call check_budget before finalising your cue text to verify it
-fits the word budget. You may also call check_collision to verify no overlap with dialogue.
+IMPORTANT: You are a text-only agent here (no tool calls). Return ONLY valid JSON.
 
 Silence gap: {gap.start:.2f}s to {gap.end:.2f}s ({gap.duration:.2f}s)
 Hard word budget: {budget} words MAXIMUM
 Dialogue before: "{gap.preceding_context}"
 Dialogue after:  "{gap.following_context}"
-Facts already established: {facts_str}
+Facts already established: {facts_str_cur}
 {media_label}
 
-After calling the guard tools, return ONLY valid JSON — no markdown:
+Return ONLY valid JSON — no markdown:
 {{"text": "A woman in a red coat crosses the empty platform."}}
 or if nothing worth describing:
 {{"text": null, "reason": "brief explanation"}}
 
 Rules:
-- MUST be {budget} words or fewer — this is a hard limit, not a guide
+- MUST be {budget} words or fewer — hard limit
 - Present tense, active voice, specific and visual
 - Do not describe what the audio already conveys
 - Do not repeat established facts
@@ -414,41 +460,9 @@ Rules:
 """
 
         _t0 = _time.time()
-        print(f"[describer] {gap.gap_id}: writing copy via ADK (budget={budget} words)...")
+        print(f"[describer] {gap.gap_id}: writing copy via fallback (budget={budget} words)...")
 
-        # Build cache key for ADK path (includes video offset or frame sha)
-        adk_cache_key = hashlib.sha256(
-            (copy_prompt + media_sha256).encode()
-        ).hexdigest()
-
-        # Try ADK path first; fall back to direct generate if ADK fails
-        raw2 = None
-        try:
-            raw2 = _run_adk_copy_pass(copy_prompt, gap.duration, dialogue_spans_json)
-        except Exception as exc:
-            print(f"[describer] ADK path failed for {gap.gap_id}: {exc} — falling back")
-
-        if raw2 is None:
-            # Fallback: direct generate (still has cache, safety settings)
-            if video_part:
-                # For fallback, build content with video part
-                contents = [video_part, types.Part.from_text(text=copy_prompt)]
-                try:
-                    resp = _generate(client, contents, safety_settings=_SAFETY_SETTINGS)
-                    raw2 = resp.text
-                except Exception as exc2:
-                    print(f"[describer] fallback generate failed for {gap.gap_id}: {exc2}")
-                    cues.append(Cue(
-                        cue_id=f"cue_{gap.gap_id}",
-                        start=gap.start, end=gap.end,
-                        text=None, gap_id=gap.gap_id, skip_reason="salience",
-                    ))
-                    continue
-            else:
-                raw2 = _cached_generate(
-                    client, copy_prompt, media_sha256, media_bytes, media_mime
-                )
-
+        raw2 = _cached_generate(client, copy_prompt, media_sha256, media_bytes, media_mime)
         if raw2 is None:
             cues.append(Cue(
                 cue_id=f"cue_{gap.gap_id}",
@@ -465,8 +479,6 @@ Rules:
         try:
             copy_data = json.loads(raw2)
         except json.JSONDecodeError:
-            # Extract first {...} block if model included surrounding text
-            import re
             m = re.search(r'\{[^{}]+\}', raw2)
             if m:
                 copy_data = json.loads(m.group())
@@ -480,7 +492,6 @@ Rules:
                 continue
 
         text = copy_data.get("text")
-
         if text is None:
             cues.append(Cue(
                 cue_id=f"cue_{gap.gap_id}",
@@ -490,7 +501,6 @@ Rules:
             print(f"[describer] {gap.gap_id}: SKIP (redundant — {copy_data.get('reason', '')})")
             continue
 
-        # Word budget check — drop if over budget
         wc = count_words(text)
         if wc > budget:
             print(f"[describer] {gap.gap_id}: SKIP (copy exceeded budget: {wc} > {budget})")
@@ -501,13 +511,10 @@ Rules:
             ))
             continue
 
-        # Collision guard — verify cue doesn't overlap any dialogue
         candidate_cue = {"start": gap.start, "end": gap.end, "text": text}
         assert_no_collision([candidate_cue], dialogue_spans)
 
-        # Add to established facts
         established_facts.append(text)
-
         cue = Cue(
             cue_id=f"cue_{gap.gap_id}",
             start=gap.start, end=gap.end,
