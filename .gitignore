@@ -42,3 +42,4 @@ frontend/node_modules/
 .pytest_cache/
 htmlcov/
 .coverage
+frontend/tsconfig.tsbuildinfo

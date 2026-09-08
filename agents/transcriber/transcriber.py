@@ -165,6 +165,7 @@ def transcribe(video_path: str) -> Transcript:
     Falls back to direct generate_content if the ADK runner fails.
     """
     client = _get_client()
+    use_vertex = bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         audio_path = tmp.name
@@ -173,23 +174,33 @@ def transcribe(video_path: str) -> Transcript:
     try:
         extract_audio(video_path, audio_path)
         size_kb = Path(audio_path).stat().st_size // 1024
-        print(f"[transcriber] Uploading audio ({size_kb}KB)...")
+        print(f"[transcriber] Audio extracted ({size_kb}KB)...")
 
-        uploaded = client.files.upload(
-            file=audio_path,
-            config=types.UploadFileConfig(mime_type="audio/wav"),
-        )
+        # Build the audio part — Vertex AI does not support files.upload;
+        # use inline bytes. Developer API uses Files API for larger files.
+        if use_vertex:
+            audio_bytes = Path(audio_path).read_bytes()
+            audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+            print("[transcriber] Using inline audio bytes (Vertex AI path)...")
+        else:
+            print(f"[transcriber] Uploading audio ({size_kb}KB)...")
+            uploaded = client.files.upload(
+                file=audio_path,
+                config=types.UploadFileConfig(mime_type="audio/wav"),
+            )
+            audio_part = types.Part.from_uri(file_uri=uploaded.uri, mime_type="audio/wav")
 
-        print("[transcriber] Requesting transcription via ADK agent...")
+        print("[transcriber] Requesting transcription...")
         raw = None
 
-        # ADK path
-        try:
-            raw = _run_transcriber_agent(client, uploaded.uri)
-        except Exception as exc:
-            print(f"[transcriber] ADK path failed: {exc} — falling back to direct generate")
+        # ADK path (only works with uploaded URI, skip on Vertex inline path)
+        if not use_vertex and uploaded is not None:
+            try:
+                raw = _run_transcriber_agent(client, uploaded.uri)
+            except Exception as exc:
+                print(f"[transcriber] ADK path failed: {exc} — falling back to direct generate")
 
-        # Fallback: direct model ladder
+        # Direct model ladder
         if raw is None:
             last_err = None
             response = None
@@ -211,7 +222,7 @@ Rules:
                     response = client.models.generate_content(
                         model=model,
                         contents=[
-                            types.Part.from_uri(file_uri=uploaded.uri, mime_type="audio/wav"),
+                            audio_part,
                             types.Part.from_text(text=prompt),
                         ],
                         config=types.GenerateContentConfig(
