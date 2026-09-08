@@ -38,12 +38,24 @@ def get_producer() -> Producer:
 
 
 def get_consumer(group_id: str, topics: list[str]) -> Consumer:
-    """Return a configured Confluent Consumer subscribed to *topics*."""
+    """Return a configured Confluent Consumer subscribed to *topics*.
+
+    max.poll.interval.ms is raised to 30 minutes because the describer makes
+    one multimodal video-understanding call per gap, which can take several
+    minutes each.  Without this, Kafka evicts the consumer mid-batch (default
+    5-minute limit), redelivers the message, and burns Vertex quota on a
+    re-run that also never commits.
+    """
     cfg = _base_config()
     cfg.update({
         "group.id": group_id,
         "auto.offset.reset": "earliest",
         "enable.auto.commit": True,
+        # Describer per-gap video calls are slow — do not evict the consumer
+        # while it is legitimately working through a batch of gaps.
+        "max.poll.interval.ms": 1800000,   # 30 min — describer video calls are slow
+        "session.timeout.ms": 45000,
+        "heartbeat.interval.ms": 15000,
     })
     consumer = Consumer(cfg)
     consumer.subscribe(topics)

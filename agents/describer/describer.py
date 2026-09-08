@@ -413,6 +413,7 @@ Rules:
 - Do not mention camera angles or filmmaking
 """
 
+        _t0 = _time.time()
         print(f"[describer] {gap.gap_id}: writing copy via ADK (budget={budget} words)...")
 
         # Build cache key for ADK path (includes video offset or frame sha)
@@ -513,7 +514,7 @@ Rules:
             text=text, word_count=wc, gap_id=gap.gap_id,
         )
         cues.append(cue)
-        print(f"[describer] {gap.gap_id}: ✓ '{text}' ({wc}/{budget} words)")
+        print(f"[describer] {gap.gap_id}: ✓ '{text}' ({wc}/{budget} words, {_time.time()-_t0:.1f}s)")
 
     return cues
 
