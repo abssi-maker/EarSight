@@ -19,7 +19,7 @@ load_dotenv()
 from agents.shared.gcs import download_json, make_uri, upload_from_file
 from agents.shared.kafka_client import consume_loop, get_consumer, get_producer, publish
 from agents.shared.models import Cue
-from agents.synthesiser.synthesiser import synthesise_cue, _client as _tts_client_and_model
+from agents.synthesiser.synthesiser import synthesise_cue, _client as _tts_client
 
 TOPIC_IN  = "earsight.cues"
 TOPIC_OUT = "earsight.audio-segments"
@@ -45,12 +45,12 @@ def _handle(msg: dict) -> None:
         return
 
     # ── Synthesise each cue, upload clip to GCS ───────────────────────────────
-    client, tts_model = _tts_client_and_model()
+    client = _tts_client()
     segments = []
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for cue in active_cues:
-            audio_path = synthesise_cue(cue, tmpdir, client, tts_model)
+            audio_path = synthesise_cue(cue, tmpdir, client)
             if audio_path is None:
                 continue
             # Upload to GCS: jobs/{job_id}/audio/{cue_id}.wav
