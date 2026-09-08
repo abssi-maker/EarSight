@@ -16,6 +16,8 @@ from agents.shared.models import Transcript, Gap
 
 
 MIN_GAP_SECONDS = 0.5  # ignore gaps shorter than this
+# Word timestamps are approximate, so cues must not be placed hard against a dialogue boundary.
+GAP_MARGIN_SECONDS = 0.4  # breathing room before/after dialogue
 
 
 def find_gaps(transcript: Transcript, video_duration: float) -> list[Gap]:
@@ -24,63 +26,60 @@ def find_gaps(transcript: Transcript, video_duration: float) -> list[Gap]:
 
     A gap is any span ≥ MIN_GAP_SECONDS with no transcript word overlapping it.
     We also check the gap before the first word and after the last word.
+    Each gap is shrunk by GAP_MARGIN_SECONDS at both ends before being emitted.
     """
     gaps: list[Gap] = []
     gap_index = 0
 
     words = sorted(transcript.words, key=lambda w: w.start)
 
-    # Gap before first word
-    if words and words[0].start >= MIN_GAP_SECONDS:
+    def _emit_gap(raw_start, raw_end, preceding, following):
+        nonlocal gap_index
+        start = raw_start + GAP_MARGIN_SECONDS
+        end = raw_end - GAP_MARGIN_SECONDS
+        duration = end - start
+        if duration < MIN_GAP_SECONDS:
+            return
         gaps.append(Gap(
             gap_id=f"gap_{gap_index:03d}",
-            start=0.0,
-            end=words[0].start,
-            duration=words[0].start,
-            preceding_context="",
-            following_context=words[0].word if words else "",
+            start=start,
+            end=end,
+            duration=duration,
+            preceding_context=preceding,
+            following_context=following,
         ))
         gap_index += 1
+
+    # Gap before first word
+    if words and words[0].start >= MIN_GAP_SECONDS:
+        _emit_gap(0.0, words[0].start, "", words[0].word)
 
     # Gaps between words
     for i in range(len(words) - 1):
         gap_start = words[i].end
         gap_end = words[i + 1].start
-        duration = gap_end - gap_start
-        if duration >= MIN_GAP_SECONDS:
+        if (gap_end - gap_start) >= MIN_GAP_SECONDS:
             # Context: up to 10 words before and after
             preceding = " ".join(w.word for w in words[max(0, i - 9):i + 1])
             following = " ".join(w.word for w in words[i + 1:i + 11])
-            gaps.append(Gap(
-                gap_id=f"gap_{gap_index:03d}",
-                start=gap_start,
-                end=gap_end,
-                duration=duration,
-                preceding_context=preceding,
-                following_context=following,
-            ))
-            gap_index += 1
+            _emit_gap(gap_start, gap_end, preceding, following)
 
     # Gap after last word
     if words and (video_duration - words[-1].end) >= MIN_GAP_SECONDS:
-        gaps.append(Gap(
-            gap_id=f"gap_{gap_index:03d}",
-            start=words[-1].end,
-            end=video_duration,
-            duration=video_duration - words[-1].end,
-            preceding_context=words[-1].word,
-            following_context="",
-        ))
-        gap_index += 1
+        _emit_gap(words[-1].end, video_duration, words[-1].word, "")
 
     # No words at all — the whole video is a gap
     if not words and video_duration >= MIN_GAP_SECONDS:
-        gaps.append(Gap(
-            gap_id="gap_000",
-            start=0.0,
-            end=video_duration,
-            duration=video_duration,
-        ))
+        start = GAP_MARGIN_SECONDS
+        end = video_duration - GAP_MARGIN_SECONDS
+        duration = end - start
+        if duration >= MIN_GAP_SECONDS:
+            gaps.append(Gap(
+                gap_id="gap_000",
+                start=start,
+                end=end,
+                duration=duration,
+            ))
 
     return gaps
 
