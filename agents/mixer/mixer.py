@@ -111,13 +111,14 @@ def mix(
     # Build duck filter: volume envelope that drops to DUCK_VOLUME during narration windows
     # Use volume= with enable expressions for each cue window
     duck_conditions = "+".join(
-        f"between(t,{c.start:.3f},{c.end:.3f})" for c in active_cues
+        f"between(t,{max(0.0, c.start - 0.25):.3f},{c.end + 0.25:.3f})" for c in active_cues
     )
     duck_expr = f"if(gt({duck_conditions},0),{DUCK_VOLUME},1)"
-    filter_parts.append(f"[0:a]volume='{duck_expr}'[ducked]")
+    filter_parts.append(f"[0:a]volume='{duck_expr}':eval=frame[ducked]")
 
-    # Mix ducked original with narration
-    filter_parts.append("[ducked][narration]amix=inputs=2:normalize=0[mixed]")
+    # Boost narration above the bed, then mix
+    filter_parts.append("[narration]volume=1.6[narration_up]")
+    filter_parts.append("[ducked][narration_up]amix=inputs=2:normalize=0[mixed]")
 
     filter_graph = ";".join(filter_parts)
 
