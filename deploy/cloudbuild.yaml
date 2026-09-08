@@ -77,7 +77,7 @@ steps:
       - '--no-cpu-throttling'
       - '--min-instances=1'
       - '--set-env-vars'
-      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_VERTEX_LOCATION},GOOGLE_GENAI_USE_VERTEXAI=TRUE'
       - '--set-secrets'
       - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
@@ -111,7 +111,7 @@ steps:
       - '--no-cpu-throttling'
       - '--min-instances=1'
       - '--set-env-vars'
-      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_VERTEX_LOCATION},GOOGLE_GENAI_USE_VERTEXAI=TRUE'
       - '--set-secrets'
       - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
@@ -128,7 +128,7 @@ steps:
       - '--no-cpu-throttling'
       - '--min-instances=1'
       - '--set-env-vars'
-      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_REGION}'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_VERTEX_LOCATION}'
       - '--set-secrets'
       - 'CONFLUENT_BOOTSTRAP_SERVERS=CONFLUENT_BOOTSTRAP_SERVERS:latest,CONFLUENT_API_KEY=CONFLUENT_API_KEY:latest,CONFLUENT_API_SECRET=CONFLUENT_API_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest'
 
@@ -162,6 +162,8 @@ steps:
 
 substitutions:
   _REGION: us-central1
+  # New Gemini models reach Vertex's global endpoint before regional ones.
+  _VERTEX_LOCATION: 'global'
   _TAG: 'latest'
   _ORCHESTRATOR_URL: ''   # override at deploy time
 
