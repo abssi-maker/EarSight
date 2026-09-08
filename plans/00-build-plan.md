@@ -312,7 +312,7 @@ being placed on a timeline. The UI must pass the screen-reader test (§3).
 
 ### Step 7 — Resilience, reset script, and demo cache
 
-**Status:** `[x] done — final session (Phase 3)`
+**Status:** `[ ] pending`
 
 **Intent**  
 Make the demo reliable. Partial failure should not produce a stack trace — a job
@@ -345,7 +345,7 @@ live quota.
 
 ### Step 8 — Bob evidence trail + README completion
 
-**Status:** `[x] done — final session (Phase 4)`
+**Status:** `[ ] pending`
 
 **Intent**  
 Ensure the repository reads as an auditable IBM Bob build to a judge who has never
@@ -423,3 +423,16 @@ The brief specifies four bootstrap tasks that precede the step plan. These are d
 ---
 
 *This plan was generated in Plan mode. Implementation begins only after Alami approves it.*
+
+---
+
+## Final session addendum
+
+Commit `2153477` ("Phase 0 — defect fixes and collateral improvements") was a
+regression-fix pass applied after Step 6 shipped; it does not map to any numbered
+step in this plan. Commit `23fa6e7` ("Phase 1 — native-ADK adoption") refactored
+the transcriber and describer to use `google.adk` LlmAgent/Runner; it also does
+not map to a numbered step. Neither commit advances the step counter. Subsequent
+commits return to the Step 1–8 numbering defined above. A judge reading `git log`
+should treat both "Phase" commits as defect-fix/refactor work that occurred between
+Step 6 and Step 6.1.
