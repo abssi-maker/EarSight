@@ -134,18 +134,30 @@ def synthesise_cue(
 
     # Trim/pad to exactly fit the gap duration using ffmpeg
     gap_duration = cue.end - cue.start
+    with wave.open(tmp_path, "rb") as _wf:
+        clip_duration = _wf.getnframes() / _wf.getframerate()
+    fade_start = max(0.0, min(gap_duration, clip_duration) - 0.1)
     subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", tmp_path,
             "-t", str(gap_duration),
-            "-af", "afade=t=out:st=0:d=0.1",  # brief fade-out to avoid hard cut
+            "-af", f"afade=t=out:st={fade_start:.3f}:d=0.1",
             out_path,
         ],
         check=True,
         capture_output=True,
     )
     os.unlink(tmp_path)
+
+    # Guard: assert output is not silent
+    with wave.open(out_path, "rb") as _wf:
+        import struct as _struct
+        raw = _wf.readframes(_wf.getnframes())
+        samples = _struct.unpack(f"<{len(raw)//2}h", raw)
+        peak = max(abs(s) for s in samples) if samples else 0
+        if peak <= 1000:
+            print(f"[synthesiser] WARNING {cue.cue_id}: output is silent")
 
     print(f"[synthesiser] {cue.cue_id}: ✓ saved to {out_path}")
     return out_path
