@@ -228,26 +228,36 @@ def _run_adk_gap(
             user_parts.append(video_part)
         user_parts.append(types.Part.from_text(text="Write the description cue for this gap now."))
 
-        # Scan events for a submit_cue function call — that carries the result
-        submit_args: Optional[dict] = None
-        async for event in runner.run_async(
-            user_id="system",
-            session_id=session.id,
-            new_message=types.Content(role="user", parts=user_parts),
-            run_config=RunConfig(max_llm_calls=_MAX_LLM_CALLS),
-        ):
-            if hasattr(event, "content") and event.content:
-                for part in event.content.parts:
-                    if hasattr(part, "function_call") and part.function_call:
-                        fc = part.function_call
-                        if fc.name == "submit_cue":
-                            submit_args = dict(fc.args) if fc.args else {}
+        # Break as soon as submit_cue is seen — mode=ANY would force more calls
+        # after it, looping until max_llm_calls is hit and discarding the result.
+        captured_cue: Optional[dict] = None
+        try:
+            async for event in runner.run_async(
+                user_id="system",
+                session_id=session.id,
+                new_message=types.Content(role="user", parts=user_parts),
+                run_config=RunConfig(max_llm_calls=_MAX_LLM_CALLS),
+            ):
+                if hasattr(event, "content") and event.content:
+                    for part in event.content.parts:
+                        if hasattr(part, "function_call") and part.function_call:
+                            fc = part.function_call
+                            if fc.name == "submit_cue":
+                                captured_cue = dict(fc.args) if fc.args else {}
+                                break  # stop consuming events immediately
+                if captured_cue is not None:
+                    break
+        except Exception:
+            # If an exception fires (e.g. max_llm_calls) but we already captured
+            # a submit_cue, use it — only re-raise when nothing was captured.
+            if captured_cue is None:
+                raise
 
-        if submit_args is None:
+        if captured_cue is None:
             return None, "no_submit"
 
-        text = submit_args.get("text") or None
-        skip_reason = submit_args.get("skip_reason") or None
+        text = captured_cue.get("text") or None
+        skip_reason = captured_cue.get("skip_reason") or None
         # Treat empty string as skip
         if text == "":
             text = None

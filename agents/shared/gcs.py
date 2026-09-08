@@ -74,9 +74,25 @@ def make_uri(job_id: str, filename: str) -> str:
 def signed_url(gcs_uri: str, hours: int = 6) -> str:
     """
     Generate a signed HTTPS URL for a GCS object, valid for `hours` hours.
-    The calling identity must have the iam.serviceAccounts.signBlob permission.
+
+    On Cloud Run, credentials are compute-engine tokens with no local private key.
+    We pass service_account_email + access_token so the client library signs via
+    the IAM SignBlob API instead of a local key.
+
+    Note: if signing still fails at runtime, the service account needs
+    roles/iam.serviceAccountTokenCreator on itself.
     """
+    import google.auth
+    import google.auth.transport.requests
+
     bucket_name, blob_name = _parse_gcs_uri(gcs_uri)
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    credentials.refresh(google.auth.transport.requests.Request())
+    service_account_email = credentials.service_account_email
+    access_token = credentials.token
+
     client = _client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
@@ -84,5 +100,7 @@ def signed_url(gcs_uri: str, hours: int = 6) -> str:
         expiration=datetime.timedelta(hours=hours),
         method="GET",
         version="v4",
+        service_account_email=service_account_email,
+        access_token=access_token,
     )
     return url
