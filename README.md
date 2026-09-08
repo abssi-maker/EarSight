@@ -190,7 +190,28 @@ curl -X POST http://localhost:8000/jobs \
 
 ---
 
+## Live deployment
+
+Seven Cloud Run services are deployed and running in project **earsight-prod-2026**,
+region **us-central1**. No end-to-end pipeline run has been verified yet.
+
+| Service | URL |
+|---|---|
+| orchestrator | https://earsight-orchestrator-131214399019.us-central1.run.app |
+| transcriber  | https://earsight-transcriber-131214399019.us-central1.run.app |
+| framer       | https://earsight-framer-131214399019.us-central1.run.app |
+| describer    | https://earsight-describer-131214399019.us-central1.run.app |
+| synthesiser  | https://earsight-synthesiser-131214399019.us-central1.run.app |
+| mixer        | https://earsight-mixer-131214399019.us-central1.run.app |
+| frontend     | https://earsight-frontend-131214399019.us-central1.run.app |
+
+---
+
 ## Deploy to Google Cloud Run
+
+`deploy/cloudbuild.yaml` uses a `_TAG` substitution (defaults to `latest`) so manual
+`gcloud builds submit` calls work without `$COMMIT_SHA`. A push trigger can override
+with `--substitutions _TAG=$COMMIT_SHA`.
 
 ```bash
 gcloud config set project YOUR_PROJECT_ID
@@ -202,8 +223,11 @@ echo -n "your-api-secret"          | gcloud secrets create CONFLUENT_API_SECRET 
 echo -n "your-gemini-key"          | gcloud secrets create GOOGLE_API_KEY --data-file=-
 echo -n "earsight-media"           | gcloud secrets create GCS_BUCKET --data-file=-
 
-# Build and deploy all services
+# Build and deploy all services (manual — tags images :latest)
 gcloud builds submit --config deploy/cloudbuild.yaml
+
+# From a trigger — tags images with the commit SHA
+# --substitutions _TAG=$COMMIT_SHA
 ```
 
 ---
