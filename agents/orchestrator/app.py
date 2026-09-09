@@ -339,7 +339,7 @@ def get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     # Convert gs:// URIs to signed HTTPS URLs at response time so browsers can load them
     out = dict(job)
-    for field in ("result_video_url", "vtt_url"):
+    for field in ("result_video_url", "vtt_url", "peaks_uri"):
         raw = out.get(field)
         if raw and raw.startswith("gs://"):
             try:
