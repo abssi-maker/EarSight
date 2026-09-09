@@ -244,3 +244,15 @@ gcloud builds submit --config deploy/cloudbuild.yaml
   incomplete cue sets, per-agent deadline timeouts) was planned in Step 7 of the build
   plan but deliberately skipped to focus budget on the evidence trail (Step 8). The
   system is not fault-tolerant at the agent level; a failed agent will stall the job.
+
+---
+
+## Credits
+
+Demo footage: *Elephants Dream* (2006), directed by Bassam Kurdali,
+Blender Foundation. Source: https://archive.org/details/ElephantsDream
+Licensed under [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/).
+Modified: EarSight mixes audio description narration into the original
+soundtrack. The picture is unaltered.
+
+EarSight's own source code is MIT licensed — see LICENSE.
