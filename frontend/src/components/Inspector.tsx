@@ -2,7 +2,7 @@
 
 import { c, mono, sans } from '@/lib/theme';
 import {
-  GapSegment, budgetLine, skipLine, skipDetail, WORDS_PER_SECOND,
+  GapSegment, cueLabel, skipDetail, WORDS_PER_SECOND,
 } from '@/lib/segments';
 
 interface Props {
@@ -70,10 +70,10 @@ export default function Inspector({ segment, index, frameUrl }: Props) {
           <p style={{
             fontSize: 16.5, lineHeight: 1.42, margin: '0 0 16px',
             letterSpacing: '-0.008em',
-            color: isSilent ? c.dim : c.text,
-            fontStyle: isSilent ? 'italic' : 'normal',
+            color: segment.state === 'placed' ? c.text : c.dim,
+            fontStyle: segment.state === 'placed' ? 'normal' : 'italic',
           }}>
-            {isSilent ? skipLine() : `“${segment.cue_text}”`}
+            {cueLabel(segment)}
           </p>
 
           <div style={{ marginBottom: 15 }}>

@@ -130,8 +130,14 @@ def _handle_cues(msg: dict) -> None:
         if job_id in _jobs:
             if cues_uri:
                 try:
-                    cue_list = gcs.download_json(cues_uri)
-                    _jobs[job_id]["cues"] = cue_list
+                    payload = gcs.download_json(cues_uri)
+                    # The cues file is written as the Kafka envelope
+                    # {job_id, cues: [...]}, but GET /jobs/{id} promises a bare
+                    # list. Unwrap it, or the UI sees a dict with no length and
+                    # falls back to empty placeholder windows.
+                    if isinstance(payload, dict):
+                        payload = payload.get("cues", [])
+                    _jobs[job_id]["cues"] = payload
                 except Exception as exc:
                     print(f"[orchestrator] could not fetch cues for {job_id}: {exc}")
             _jobs[job_id]["status"] = "synthesising"

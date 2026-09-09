@@ -81,7 +81,20 @@ export function buildSegments(job: JobResponse): GapSegment[] {
 
 /** Plain-words budget line: "8 of 46 words allowed". */
 export function budgetLine(seg: GapSegment) {
+  if (seg.state === 'pending') return `room for ${seg.word_budget} words`;
   return `${seg.word_count ?? 0} of ${seg.word_budget} words allowed`;
+}
+
+/**
+ * What to show for a window. A window we have not heard back about yet must
+ * never be quoted — there is no sentence to quote.
+ */
+export function cueLabel(seg: GapSegment, short = false) {
+  if (seg.state === 'skipped') return short ? 'Left silent' : skipLine();
+  if (seg.state === 'pending' || !seg.cue_text) {
+    return short ? 'Describing…' : 'Waiting for the describer…';
+  }
+  return `“${seg.cue_text}”`;
 }
 
 /** Why a window was left alone, in the describer's own terms. */

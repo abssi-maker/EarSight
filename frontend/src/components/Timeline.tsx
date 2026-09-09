@@ -1,7 +1,7 @@
 'use client';
 
 import { c, mono, sans } from '@/lib/theme';
-import { GapSegment, spokenSeconds, tcShort } from '@/lib/segments';
+import { GapSegment, cueLabel, spokenSeconds, tcShort } from '@/lib/segments';
 
 interface Props {
   peaks?: number[] | null;
@@ -107,7 +107,7 @@ export default function Timeline({
               <button
                 key={g.gap_id}
                 onClick={(e) => { e.stopPropagation(); onSelect(g.gap_id); }}
-                title={g.cue_text ?? 'Left silent'}
+                title={cueLabel(g)}
                 style={{
                   position: 'absolute', top: 10, bottom: 10,
                   left: pct(g.start), width: wid(g.start, g.end),
@@ -122,10 +122,10 @@ export default function Timeline({
                 <span style={{
                   fontFamily: mono, fontSize: 10, whiteSpace: 'nowrap',
                   overflow: 'hidden', textOverflow: 'ellipsis',
-                  color: isSilent ? c.dim : c.amber,
-                  fontStyle: isSilent ? 'italic' : 'normal',
+                  color: g.state === 'placed' ? c.amber : c.dim,
+                  fontStyle: g.state === 'placed' ? 'normal' : 'italic',
                 }}>
-                  {isSilent ? 'Left silent' : `“${g.cue_text}”`}
+                  {cueLabel(g, true)}
                 </span>
               </button>
             );

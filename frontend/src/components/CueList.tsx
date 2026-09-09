@@ -1,7 +1,7 @@
 'use client';
 
 import { c, mono, sans } from '@/lib/theme';
-import { GapSegment, budgetLine, skipLine, tc } from '@/lib/segments';
+import { GapSegment, budgetLine, cueLabel, tc } from '@/lib/segments';
 
 interface Props {
   segments: GapSegment[];
@@ -29,7 +29,8 @@ export default function CueList({ segments, frameUrls, selectedId, onSelect }: P
       <div style={{ padding: '12px 14px 10px', borderBottom: `1px solid ${c.rule}`, flex: 'none' }}>
         <p style={{ fontSize: 12.5, fontWeight: 600, margin: 0, color: c.text }}>Descriptions</p>
         <p style={{ fontFamily: mono, fontSize: 10, color: c.dim, margin: '4px 0 0' }}>
-          {segments.length} silence window{segments.length === 1 ? '' : 's'} · {described} described · {silent} left silent
+          {segments.length} silence window{segments.length === 1 ? '' : 's'}
+          {described + silent > 0 && ` · ${described} described · ${silent} left silent`}
         </p>
       </div>
 
@@ -73,10 +74,10 @@ export default function CueList({ segments, frameUrls, selectedId, onSelect }: P
                 </span>
                 <span style={{
                   fontSize: 12.5, lineHeight: 1.4, margin: '4px 0 6px', display: 'block',
-                  color: isSilent ? c.dim : c.text,
-                  fontStyle: isSilent ? 'italic' : 'normal',
+                  color: seg.state === 'placed' ? c.text : c.dim,
+                  fontStyle: seg.state === 'placed' ? 'normal' : 'italic',
                 }}>
-                  {isSilent ? skipLine() : `“${seg.cue_text}”`}
+                  {cueLabel(seg)}
                 </span>
                 <span style={{
                   fontFamily: mono, fontSize: 9.5, display: 'block',
