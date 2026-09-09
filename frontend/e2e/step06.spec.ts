@@ -55,6 +55,8 @@ test.describe('Step 6 — EarSight frontend', () => {
         status: 'done',
         gap_count: 4,
         peaks_uri: 'http://localhost:8000/fake-peaks.json',
+        source_video_url: 'http://localhost:3000/demo/original.mp4',
+        frame_urls: { gap_000: 'http://localhost:3000/f0.jpg', gap_001: 'http://localhost:3000/f1.jpg', gap_002: 'http://localhost:3000/f2.jpg', gap_003: 'http://localhost:3000/f3.jpg' },
         events: [
           { ts: 0.1,  topic: 'earsight.jobs',           service: 'orchestrator', direction: 'produce' },
           { ts: 0.2,  topic: 'earsight.jobs',           service: 'transcriber',  direction: 'consume' },
@@ -100,6 +102,15 @@ test.describe('Step 6 — EarSight frontend', () => {
       });
     });
 
+    // Mock frame images
+    await page.route('**/api/frame**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#2b2b2b"/><text x="160" y="96" fill="#888" font-size="15" text-anchor="middle">frame</text></svg>' });
+    });
+    await page.route('**/demo/original.mp4', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('') });
+    });
+
     // Mock /api/vtt proxy (Next.js API route)
     await page.route('**/api/vtt**', async (route) => {
       await route.fulfill({
@@ -132,6 +143,8 @@ test.describe('Step 6 — EarSight frontend', () => {
   });
 
   test('pipeline view and player appear after upload', async ({ page }) => {
+    // The editor shell is a landscape app surface — give it a real desktop viewport.
+    await page.setViewportSize({ width: 1580, height: 980 });
     await page.goto('/');
 
     // Simulate file selection via the hidden input
@@ -151,13 +164,22 @@ test.describe('Step 6 — EarSight frontend', () => {
     }
 
     // Pipeline section should appear
-    await expect(page.getByRole('region', { name: /pipeline timeline/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('region', { name: /description decisions/i })).toBeVisible({ timeout: 5000 });
 
     // Wait for 'done' state (poll mocked to progress quickly)
-    await expect(page.getByText('done')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/done/i).first()).toBeVisible({ timeout: 15_000 });
 
     // Player section should appear
     await expect(page.getByRole('region', { name: /described video player/i })).toBeVisible({ timeout: 5000 });
+
+    // The three things this project should be judged on
+    await expect(page.getByRole('group', { name: /compare original and described/i })).toBeVisible();
+    await expect(page.getByRole('region', { name: /agent pipeline/i })).toBeVisible();
+    await expect(page.getByRole('region', { name: /timeline/i })).toBeVisible();
+    await expect(page.getByText('8 of 46 words allowed').first()).toBeVisible();
+    await expect(page.getByText(/Left silent/i).first()).toBeVisible();
+    await expect(page.getByText('audio-segments')).toBeVisible();
+    await expect(page.getByText('dead-letter · 0')).toBeVisible();
 
     // Ensure docs/steps directory exists (frontend/e2e/ → ../../../../docs/steps)
     const stepsDir = path.resolve(__dirname, '../../docs/steps');
@@ -166,7 +188,6 @@ test.describe('Step 6 — EarSight frontend', () => {
     // Screenshot
     await page.screenshot({
       path: path.join(stepsDir, '06-pipeline.png'),
-      fullPage: true,
     });
   });
 

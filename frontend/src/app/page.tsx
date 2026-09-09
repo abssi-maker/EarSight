@@ -2,64 +2,17 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import UploadZone from '@/components/UploadZone';
-import PipelineView, { GapSegment, SegmentState } from '@/components/PipelineView';
+import TopBar from '@/components/TopBar';
+import CueList from '@/components/CueList';
+import Inspector from '@/components/Inspector';
 import Player from '@/components/Player';
+import Timeline from '@/components/Timeline';
 import AgentLane from '@/components/AgentLane';
-import { uploadVideo, createJob, getJob, JobResponse, fetchPeaks, PeaksData } from '@/lib/api';
-
-// Map pipeline status → SegmentState for each gap
-function statusToSegmentState(jobStatus: string): SegmentState {
-  switch (jobStatus) {
-    case 'transcribing': return 'detected';
-    case 'framing':      return 'framing';
-    case 'describing':   return 'describing';
-    case 'synthesising': return 'synthesising';
-    case 'mixing':       return 'synthesising';
-    case 'done':         return 'placed';
-    case 'failed':       return 'skipped';
-    default:             return 'detected';
-  }
-}
-
-function buildSegments(job: JobResponse, activeCueTime?: number): GapSegment[] {
-  // If we have cue data, build one segment per cue/gap
-  if (job.cues && job.cues.length > 0) {
-    return job.cues.map((c) => {
-      const duration = c.end - c.start;
-      const budget = Math.floor(duration * 2.75);
-      const isActive =
-        activeCueTime !== undefined &&
-        c.text !== null &&
-        activeCueTime >= c.start &&
-        activeCueTime <= c.end;
-      return {
-        gap_id: c.gap_id,
-        start: c.start,
-        end: c.end,
-        duration,
-        word_budget: budget,
-        state: c.text !== null ? 'placed' : 'skipped',
-        cue_text: c.text,
-        word_count: c.word_count,
-        skip_reason: c.skip_reason ?? null,
-        active_cue: isActive,
-      };
-    });
-  }
-
-  // No cue data yet — synthesise placeholder segments from gap_count
-  const count = job.gap_count ?? 0;
-  const state = statusToSegmentState(job.status);
-  const placeholderDuration = 5;
-  return Array.from({ length: count }, (_, i) => ({
-    gap_id: `gap_${String(i).padStart(3, '0')}`,
-    start: i * (placeholderDuration + 1),
-    end: i * (placeholderDuration + 1) + placeholderDuration,
-    duration: placeholderDuration,
-    word_budget: Math.floor(placeholderDuration * 2.75),
-    state,
-  }));
-}
+import {
+  uploadVideo, createJob, getJob, JobResponse, fetchPeaks, PeaksData,
+} from '@/lib/api';
+import { buildSegments } from '@/lib/segments';
+import { c, mono } from '@/lib/theme';
 
 type AppState = 'idle' | 'uploading' | 'processing' | 'done' | 'failed';
 
@@ -67,17 +20,20 @@ export default function Home() {
   const [appState, setAppState] = useState<AppState>('idle');
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
+  const [fileLabel, setFileLabel] = useState('');
   const [error, setError] = useState('');
-  const [currentTime, setCurrentTime] = useState<number | undefined>(undefined);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [peaksData, setPeaksData] = useState<PeaksData | null>(null);
+  const [described, setDescribed] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peaksFetchedRef = useRef(false);
 
   const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
   const startPolling = useCallback((id: string) => {
@@ -87,40 +43,32 @@ export default function Home() {
         const data = await getJob(id);
         setJob(data);
 
-        // Fetch peaks once they arrive
         if (data.peaks_uri && !peaksFetchedRef.current) {
           peaksFetchedRef.current = true;
-          fetchPeaks(data.peaks_uri).then((p) => {
-            if (p) setPeaksData(p);
-          });
+          fetchPeaks(data.peaks_uri).then((p) => { if (p) setPeaksData(p); });
         }
 
-        if (data.status === 'done') {
-          stopPolling();
-          setAppState('done');
-        } else if (data.status === 'failed') {
-          stopPolling();
-          setAppState('failed');
+        if (data.status === 'done') { stopPolling(); setAppState('done'); }
+        else if (data.status === 'failed') {
+          stopPolling(); setAppState('failed');
           setError(data.error ?? 'Pipeline failed.');
         }
       } catch {
-        // ignore transient poll errors
+        // transient poll error — keep polling
       }
     }, 2000);
   }, [stopPolling]);
 
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
   async function handleFile(file: File) {
-    setError('');
-    setJob(null);
-    setJobId(null);
-    setPeaksData(null);
+    setError(''); setJob(null); setJobId(null); setPeaksData(null);
+    setSelectedId(null); setCurrentTime(0); setDuration(0);
     peaksFetchedRef.current = false;
+    setFileLabel(file.name);
     setAppState('uploading');
-
     try {
-      // Upload video to GCS via orchestrator /upload
       const gcsUri = await uploadVideo(file);
-
       const created = await createJob({ video_uri: gcsUri, label: file.name });
       setJobId(created.job_id);
       setJob(created);
@@ -132,117 +80,131 @@ export default function Home() {
     }
   }
 
-  const segments = job ? buildSegments(job, currentTime) : [];
-  const isDone = appState === 'done' && job?.result_video_url && job?.vtt_url;
+  function reset() {
+    stopPolling();
+    setAppState('idle'); setJob(null); setJobId(null); setError('');
+    setPeaksData(null); setSelectedId(null); setFileLabel('');
+    setCurrentTime(0); setDuration(0); setDescribed(true);
+    peaksFetchedRef.current = false;
+  }
+
+  const segments = job ? buildSegments(job) : [];
+
+  // Default the inspector to the first window as soon as cues arrive.
+  useEffect(() => {
+    if (!selectedId && segments.length > 0) setSelectedId(segments[0].gap_id);
+  }, [segments, selectedId]);
+
+  const selectedIndex = Math.max(0, segments.findIndex((s) => s.gap_id === selectedId));
+  const selected = segments[selectedIndex] ?? null;
+
+  const active = segments.find(
+    (s) => s.cue_text && currentTime >= s.start && currentTime <= s.end,
+  );
+
+  const ready = Boolean(job?.result_video_url && job?.vtt_url);
+  const src = described
+    ? (job?.result_video_url ?? '')
+    : (job?.source_video_url ?? job?.result_video_url ?? '');
+
+  function seek(t: number) {
+    const v = videoRef.current;
+    if (v) v.currentTime = t;
+    setCurrentTime(t);
+  }
+
+  if (appState === 'idle' || appState === 'uploading') {
+    return (
+      <main style={{ height: '100vh', background: c.bg }}>
+        <UploadZone onFile={handleFile} disabled={appState === 'uploading'} />
+        {error && (
+          <p role="alert" style={{
+            position: 'fixed', bottom: 24, left: 0, right: 0, textAlign: 'center',
+            color: c.err, fontFamily: mono, fontSize: 13,
+          }}>
+            {error}
+          </p>
+        )}
+      </main>
+    );
+  }
 
   return (
     <main
-      id="main-content"
-      style={{ maxWidth: 720, margin: '64px auto', padding: '0 24px' }}
+      style={{
+        height: '100vh',
+        display: 'grid',
+        gridTemplateRows: '54px minmax(0, 1fr) 62px 250px',
+        background: c.bg,
+      }}
     >
-      {/* Skip link */}
-      <a
-        href="#main-content"
-        style={{
-          position: 'absolute',
-          left: -9999,
-          top: 'auto',
-          width: 1,
-          height: 1,
-          overflow: 'hidden',
-        }}
-      >
-        Skip to main content
-      </a>
+      <TopBar
+        fileLabel={fileLabel || 'video'}
+        duration={duration}
+        jobId={jobId}
+        status={job?.status ?? 'queued'}
+        described={described}
+        canCompare={Boolean(job?.source_video_url) && ready}
+        onToggle={setDescribed}
+        onReset={reset}
+        downloadUrl={ready ? job?.result_video_url : null}
+      />
 
-      {/* Header */}
-      <header style={{ marginBottom: 40 }}>
-        <h1 style={{ color: '#f5a623', fontSize: 28, letterSpacing: '0.06em', margin: '0 0 6px' }}>
-          EARSIGHT
-        </h1>
-        <p style={{ color: '#8a8a8a', fontSize: 14, margin: 0 }}>
-          Drop a video. Hear everything.
-        </p>
-      </header>
-
-      {/* Upload zone (hidden once processing starts) */}
-      {(appState === 'idle' || appState === 'uploading') && (
-        <UploadZone onFile={handleFile} disabled={appState === 'uploading'} />
-      )}
-
-      {/* Error */}
-      {error && (
-        <p role="alert" style={{ color: '#e55', marginTop: 16, fontSize: 13 }}>
-          {error}
-        </p>
-      )}
-
-      {/* Job metadata */}
-      {jobId && (
-        <div style={{ marginTop: 24, fontSize: 12, color: '#767676' }}>
-          <span>Job&nbsp;</span>
-          <code style={{ color: '#888' }}>{jobId}</code>
-          <span style={{ marginLeft: 12 }}>
-            Status:{' '}
-            <strong style={{ color: job?.status === 'done' ? '#f5a623' : '#aaa' }}>
-              {job?.status ?? 'queued'}
-            </strong>
-          </span>
-        </div>
-      )}
-
-      {/* Agent lane visualisation */}
-      {job && job.events && job.events.length > 0 && (
-        <AgentLane events={job.events} />
-      )}
-
-      {/* Pipeline timeline */}
-      {(appState === 'processing' || appState === 'done') && (
-        <PipelineView
+      <div style={{ display: 'grid', gridTemplateColumns: '268px minmax(0, 1fr) 330px', minHeight: 0 }}>
+        <CueList
           segments={segments}
-          peaksData={peaksData}
-          currentTime={currentTime}
+          frameUrls={job?.frame_urls}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
         />
-      )}
 
-      {/* Player — appears when done */}
-      {isDone && (
-        <Player
-          videoUrl={job!.result_video_url!}
-          vttUrl={job!.vtt_url!}
-          onTimeUpdate={setCurrentTime}
-          segments={segments}
-          peaksData={peaksData}
+        {ready ? (
+          <Player
+            videoRef={videoRef}
+            src={src}
+            vttUrl={job!.vtt_url!}
+            described={described}
+            activeText={active?.cue_text ?? null}
+            currentTime={currentTime}
+            duration={duration}
+            onTime={setCurrentTime}
+            onDuration={setDuration}
+          />
+        ) : (
+          <section
+            aria-label="Described video player"
+            style={{
+              background: '#050506', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', flexDirection: 'column', gap: 10,
+            }}
+          >
+            <p style={{ fontFamily: mono, fontSize: 13, color: c.dim, margin: 0 }}>
+              {error ? 'Pipeline failed.' : 'Finding the silences…'}
+            </p>
+            <p style={{ fontFamily: mono, fontSize: 11, color: c.faint, margin: 0 }}>
+              {error || `${job?.status ?? 'queued'} · ${segments.length} window${segments.length === 1 ? '' : 's'} so far`}
+            </p>
+          </section>
+        )}
+
+        <Inspector
+          segment={selected}
+          index={selectedIndex}
+          frameUrl={selected ? job?.frame_urls?.[selected.gap_id] : undefined}
         />
-      )}
+      </div>
 
-      {/* Upload another */}
-      {(appState === 'done' || appState === 'failed') && (
-        <button
-          onClick={() => {
-            setAppState('idle');
-            setJob(null);
-            setJobId(null);
-            setError('');
-            setPeaksData(null);
-            peaksFetchedRef.current = false;
-          }}
-          style={{
-            marginTop: 32,
-            padding: '10px 20px',
-            background: 'transparent',
-            border: '1px solid #333',
-            borderRadius: 6,
-            color: '#aaa',
-            cursor: 'pointer',
-            fontSize: 13,
-            fontFamily: 'monospace',
-          }}
-          aria-label="Upload a new video"
-        >
-          Upload another video
-        </button>
-      )}
+      <AgentLane events={job?.events ?? []} />
+
+      <Timeline
+        peaks={peaksData?.peaks}
+        duration={peaksData?.duration ?? duration}
+        segments={segments}
+        currentTime={currentTime}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onSeek={seek}
+      />
     </main>
   );
 }

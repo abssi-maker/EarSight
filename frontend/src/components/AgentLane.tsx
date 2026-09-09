@@ -1,187 +1,102 @@
 'use client';
 
-/**
- * AgentLane.tsx — animated Kafka pipeline visualisation.
- *
- * Six service nodes arranged left-to-right:
- *   orchestrator → transcriber → framer → describer → synthesiser → mixer
- * Each pipeline event pulses an amber dot along the relevant edge.
- * A running message count is shown per topic edge.
- */
-
-import { useEffect, useRef, useState } from 'react';
 import { PipelineEvent } from '@/lib/api';
+import { c, mono, sans } from '@/lib/theme';
 
 interface Props {
   events: PipelineEvent[];
 }
 
-const SERVICES = ['orchestrator', 'transcriber', 'framer', 'describer', 'synthesiser', 'mixer'] as const;
-type Service = typeof SERVICES[number];
+/**
+ * The six Cloud Run agents in pipeline order, and the real Confluent topic
+ * each handoff crosses. `earsight.gaps` loops inside the describer and
+ * `earsight.dead-letter` catches failures, so both sit outside the chain.
+ */
+const CHAIN: { agent: string; topicAfter?: string }[] = [
+  { agent: 'orchestrator', topicAfter: 'jobs' },
+  { agent: 'transcriber',  topicAfter: 'transcript' },
+  { agent: 'framer',       topicAfter: 'frames' },
+  { agent: 'describer',    topicAfter: 'cues' },
+  { agent: 'synthesiser',  topicAfter: 'audio-segments' },
+  { agent: 'mixer',        topicAfter: 'results' },
+  { agent: 'orchestrator' },
+];
 
-// Topic → edge (from → to)
-const TOPIC_EDGES: Record<string, [Service, Service]> = {
-  'earsight.jobs':          ['orchestrator', 'transcriber'],
-  'earsight.transcript':    ['transcriber', 'describer'],
-  'earsight.frames':        ['framer', 'describer'],
-  'earsight.gaps':          ['orchestrator', 'describer'],
-  'earsight.cues':          ['describer', 'synthesiser'],
-  'earsight.audio-segments':['synthesiser', 'mixer'],
-  'earsight.results':       ['mixer', 'orchestrator'],
-};
-
-const NODE_LABEL: Record<Service, string> = {
-  orchestrator: 'orch.',
-  transcriber:  'transc.',
-  framer:       'framer',
-  describer:    'descr.',
-  synthesiser:  'synth.',
-  mixer:        'mixer',
-};
-
-interface Pulse {
-  id: string;
-  topic: string;
-  edge: [Service, Service];
-  startedAt: number;
-}
+const ASIDE_TOPICS = ['gaps', 'dead-letter'];
 
 export default function AgentLane({ events }: Props) {
-  const [pulses, setPulses] = useState<Pulse[]>([]);
-  const seenRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const newPulses: Pulse[] = [];
-    for (const ev of events) {
-      const key = `${ev.ts}-${ev.topic}`;
-      if (seenRef.current.has(key)) continue;
-      seenRef.current.add(key);
-      const edge = TOPIC_EDGES[ev.topic];
-      if (edge) {
-        newPulses.push({ id: key, topic: ev.topic, edge, startedAt: Date.now() });
-      }
-    }
-    if (newPulses.length > 0) {
-      setPulses((prev) => [...prev, ...newPulses]);
-      // Remove pulses after animation
-      setTimeout(() => {
-        setPulses((prev) => prev.filter((p) => Date.now() - p.startedAt < 1200));
-      }, 1300);
-    }
-  }, [events]);
-
-  // Count messages per topic
-  const topicCounts: Record<string, number> = {};
-  for (const ev of events) {
-    topicCounts[ev.topic] = (topicCounts[ev.topic] ?? 0) + 1;
+  const counts = new Map<string, number>();
+  for (const e of events) {
+    const short = e.topic.replace(/^earsight\./, '');
+    counts.set(short, (counts.get(short) ?? 0) + 1);
   }
+  const n = (topic: string) => counts.get(topic) ?? 0;
 
-  // Layout
-  const W = 680;
-  const H = 120;
-  const nodeW = 68;
-  const nodeH = 32;
-  const nodeY = H / 2 - nodeH / 2;
-  const spacing = W / (SERVICES.length - 1);
-
-  function nodeX(s: Service): number {
-    return SERVICES.indexOf(s) * spacing;
-  }
-  function nodeCX(s: Service): number {
-    return nodeX(s) + nodeW / 2;
-  }
-
-  // Collect active pulses with animation progress
-  const now = Date.now();
-  const activePulses = pulses.filter((p) => now - p.startedAt < 1200);
+  const railLabel: React.CSSProperties = {
+    fontFamily: mono, fontSize: 9.5, letterSpacing: '0.15em',
+    textTransform: 'uppercase', color: c.faint, whiteSpace: 'nowrap', lineHeight: 1.6,
+  };
 
   return (
-    <section aria-label="Agent pipeline lane" style={{ marginTop: 24, marginBottom: 8 }}>
-      <h2 style={{ fontSize: 11, color: '#555', letterSpacing: '0.1em', marginBottom: 8, textTransform: 'uppercase' }}>
-        Agent pipeline · {events.length} messages · {Object.keys(topicCounts).length} topics active
-      </h2>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ width: '100%', height: H, display: 'block', overflow: 'visible' }}
-        aria-hidden="true"
-      >
-        {/* Draw topic edges */}
-        {Object.entries(TOPIC_EDGES).map(([topic, [from, to]]) => {
-          const x1 = nodeCX(from);
-          const x2 = nodeCX(to);
-          const count = topicCounts[topic] ?? 0;
-          const midX = (x1 + x2) / 2;
-          const midY = nodeY - 14;
-          // skip self-edges that would be invisible
-          if (from === to) return null;
+    <section
+      aria-label="Agent pipeline"
+      style={{
+        background: c.panel, borderTop: `1px solid ${c.rule}`,
+        borderBottom: `1px solid ${c.rule}`, display: 'flex', alignItems: 'center',
+        gap: 14, padding: '0 16px', overflow: 'hidden', fontFamily: sans,
+      }}
+    >
+      <div style={railLabel}>Pipeline<br />{events.length} messages</div>
+
+      <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
+        {CHAIN.map((step, i) => {
+          const live = step.topicAfter ? n(step.topicAfter) > 0 : true;
           return (
-            <g key={topic}>
-              <line
-                x1={x1} y1={H / 2}
-                x2={x2} y2={H / 2}
-                stroke={count > 0 ? '#2a2a2a' : '#1a1a1a'}
-                strokeWidth={1.5}
-              />
-              {count > 0 && (
-                <text
-                  x={midX} y={midY}
-                  textAnchor="middle"
-                  fontSize={8}
-                  fill="#444"
-                  fontFamily="monospace"
-                >
-                  {topic.replace('earsight.', '')} ×{count}
-                </text>
+            <div key={`${step.agent}-${i}`} style={{ display: 'contents' }}>
+              <div style={{
+                fontFamily: mono, fontSize: 10.5,
+                color: live ? c.amber : c.dim,
+                background: c.raised,
+                border: `1px solid ${live ? c.amberDim : c.rule2}`,
+                borderRadius: 3, padding: '5px 9px', whiteSpace: 'nowrap',
+              }}>
+                {step.agent}
+              </div>
+              {step.topicAfter && (
+                <div style={{
+                  flex: 1, minWidth: 20, height: 30, display: 'flex',
+                  flexDirection: 'column', justifyContent: 'center',
+                  alignItems: 'center', gap: 2, padding: '0 5px',
+                }}>
+                  <span style={{ fontFamily: mono, fontSize: 9, color: c.dim, whiteSpace: 'nowrap' }}>
+                    {step.topicAfter}
+                  </span>
+                  <span style={{
+                    width: '100%', height: 1,
+                    background: n(step.topicAfter)
+                      ? `linear-gradient(90deg, ${c.amberDim}, rgba(245,166,35,0.55))`
+                      : c.rule2,
+                  }} />
+                </div>
               )}
-            </g>
+            </div>
           );
         })}
+      </div>
 
-        {/* Animate pulses */}
-        {activePulses.map((pulse) => {
-          const progress = Math.min(1, (now - pulse.startedAt) / 1000);
-          const [from, to] = pulse.edge;
-          const x1 = nodeCX(from);
-          const x2 = nodeCX(to);
-          const cx = x1 + (x2 - x1) * progress;
-          return (
-            <circle
-              key={pulse.id}
-              cx={cx} cy={H / 2}
-              r={4}
-              fill="#f5a623"
-              opacity={1 - progress * 0.6}
-            />
-          );
-        })}
+      {ASIDE_TOPICS.map((t) => (
+        <div key={t} style={{
+          fontFamily: mono, fontSize: 9.5, color: c.faint,
+          border: `1px solid ${c.rule2}`, borderRadius: 99,
+          padding: '3px 9px', whiteSpace: 'nowrap',
+        }}>
+          {t} · {n(t)}
+        </div>
+      ))}
 
-        {/* Service nodes */}
-        {SERVICES.map((s) => {
-          const x = nodeX(s);
-          const isActive = events.some((e) => e.service === s);
-          return (
-            <g key={s}>
-              <rect
-                x={x} y={nodeY}
-                width={nodeW} height={nodeH}
-                rx={4}
-                fill="#111"
-                stroke={isActive ? '#f5a623' : '#222'}
-                strokeWidth={1}
-              />
-              <text
-                x={x + nodeW / 2} y={nodeY + nodeH / 2 + 4}
-                textAnchor="middle"
-                fontSize={9}
-                fill={isActive ? '#f5a623' : '#444'}
-                fontFamily="monospace"
-              >
-                {NODE_LABEL[s]}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+      <div style={{ ...railLabel, textAlign: 'right' }}>
+        8 real Confluent<br />Kafka topics
+      </div>
     </section>
   );
 }

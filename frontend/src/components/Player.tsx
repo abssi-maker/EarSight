@@ -1,249 +1,150 @@
 'use client';
 
-/**
- * Player.tsx — custom transport controls for described video.
- *
- * Features:
- * - Play/pause button with keyboard shortcut (Space)
- * - Waveform-based scrubber (reuses Waveform component)
- * - Live cue readout showing the active description text as it speaks
- * - Keyboard: Space = play/pause, ← = −5s, → = +5s, Tab-navigable
- * - Full ARIA labels and visible focus rings
- * - Active cue wired back via onTimeUpdate for timeline highlight
- */
-
-import { useCallback, useEffect, useRef, useState } from 'react';
-import Waveform from './Waveform';
-import { GapSegment } from './PipelineView';
-import { PeaksData } from '@/lib/api';
+import { RefObject, useEffect, useRef, useState } from 'react';
+import { c, mono, sans } from '@/lib/theme';
+import { tc } from '@/lib/segments';
 
 interface Props {
-  videoUrl: string;
+  videoRef: RefObject<HTMLVideoElement>;
+  src: string;
   vttUrl: string;
-  onTimeUpdate?: (currentTime: number) => void;
-  segments?: GapSegment[];
-  peaksData?: PeaksData | null;
+  described: boolean;
+  activeText: string | null;
+  currentTime: number;
+  duration: number;
+  onTime: (t: number) => void;
+  onDuration: (d: number) => void;
 }
 
+const iconBtn: React.CSSProperties = {
+  fontFamily: mono, fontSize: 10.5, color: c.dim,
+  border: `1px solid ${c.rule2}`, borderRadius: 4, padding: '5px 9px',
+  background: 'transparent', cursor: 'pointer',
+};
+
 export default function Player({
-  videoUrl,
-  vttUrl,
-  onTimeUpdate,
-  segments = [],
-  peaksData,
+  videoRef, src, vttUrl, described, activeText, currentTime, duration,
+  onTime, onDuration,
 }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [activeCueText, setActiveCueText] = useState<string | null>(null);
+  const lastT = useRef(0);
+  const wasPlaying = useRef(false);
+  const pending = useRef<number | null>(null);
 
-  // Proxy VTT to avoid CORS on GCS signed URLs
-  const proxiedVtt = `/api/vtt?url=${encodeURIComponent(vttUrl)}`;
-
-  const handleTimeUpdate = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const t = video.currentTime;
-    setCurrentTime(t);
-    onTimeUpdate?.(t);
-
-    // Find active cue text from segments
-    const active = segments.find(
-      (s) => s.cue_text && t >= s.start && t <= s.end
-    );
-    setActiveCueText(active?.cue_text ?? null);
-  }, [onTimeUpdate, segments]);
+  // Swapping ORIGINAL/DESCRIBED reloads the element — restore the position
+  // and play state so the comparison is seamless.
+  useEffect(() => {
+    pending.current = lastT.current;
+  }, [src]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('durationchange', () => setDuration(video.duration || 0));
-    video.addEventListener('play', () => setPlaying(true));
-    video.addEventListener('pause', () => setPlaying(false));
-    return () => {
-      video.removeEventListener('timeupdate', handleTimeUpdate);
+    const v = videoRef.current;
+    if (!v) return;
+
+    const onTimeUpdate = () => {
+      lastT.current = v.currentTime;
+      onTime(v.currentTime);
     };
-  }, [handleTimeUpdate]);
+    const onMeta = () => {
+      onDuration(v.duration || 0);
+      if (pending.current != null) {
+        v.currentTime = pending.current;
+        pending.current = null;
+        if (wasPlaying.current) void v.play();
+      }
+    };
+    const onPlayEv = () => { setPlaying(true); wasPlaying.current = true; };
+    const onPauseEv = () => { setPlaying(false); wasPlaying.current = false; };
 
-  // Keyboard handler on the player section
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (e.key === ' ' || e.code === 'Space') {
-      e.preventDefault();
-      playing ? video.pause() : video.play();
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      video.currentTime = Math.max(0, video.currentTime - 5);
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      video.currentTime = Math.min(video.duration, video.currentTime + 5);
+    v.addEventListener('timeupdate', onTimeUpdate);
+    v.addEventListener('loadedmetadata', onMeta);
+    v.addEventListener('play', onPlayEv);
+    v.addEventListener('pause', onPauseEv);
+    return () => {
+      v.removeEventListener('timeupdate', onTimeUpdate);
+      v.removeEventListener('loadedmetadata', onMeta);
+      v.removeEventListener('play', onPlayEv);
+      v.removeEventListener('pause', onPauseEv);
+    };
+  }, [videoRef, onTime, onDuration]);
+
+  function toggle() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) void v.play(); else v.pause();
+  }
+  function nudge(by: number) {
+    const v = videoRef.current;
+    if (v) v.currentTime = Math.max(0, v.currentTime + by);
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = e.target as HTMLElement | null;
+      if (el && /^(INPUT|TEXTAREA|BUTTON|A)$/.test(el.tagName)) return;
+      if (e.code === 'Space') { e.preventDefault(); toggle(); }
+      else if (e.code === 'ArrowLeft') { e.preventDefault(); nudge(-5); }
+      else if (e.code === 'ArrowRight') { e.preventDefault(); nudge(5); }
     }
-  }, [playing]);
-
-  function togglePlay() {
-    const video = videoRef.current;
-    if (!video) return;
-    playing ? video.pause() : video.play();
-  }
-
-  function handleSeek(t: number) {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = t;
-  }
-
-  function fmt(s: number): string {
-    if (!isFinite(s)) return '0:00';
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60).toString().padStart(2, '0');
-    return `${m}:${sec}`;
-  }
-
-  // Build word spans from segments for the waveform dialogue shading
-  const wordSpans = segments.map((s) => ({ start: s.start, end: s.end }));
-  const effectiveDuration = peaksData?.duration || duration || 60;
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   return (
     <section
       aria-label="Described video player"
-      style={{ marginTop: 32 }}
-      onKeyDown={handleKeyDown}
+      style={{ background: '#050506', display: 'flex', flexDirection: 'column', minHeight: 0, fontFamily: sans }}
     >
-      <h2 style={{ fontSize: 13, color: '#767676', letterSpacing: '0.1em', marginBottom: 12, textTransform: 'uppercase' }}>
-        Player
-      </h2>
-
-      {/* Hidden video element */}
-      <video
-        ref={videoRef}
-        style={{ display: 'none' }}
-        aria-label="Described video with audio description track"
-        preload="metadata"
-      >
-        <source src={videoUrl} type="video/mp4" />
-        <track
-          kind="descriptions"
-          src={proxiedVtt}
-          srcLang="en"
-          label="Audio descriptions"
-          default
-        />
-      </video>
-
-      {/* Waveform scrubber */}
-      {peaksData && (
-        <div style={{ marginBottom: 12 }}>
-          <Waveform
-            peaks={peaksData.peaks}
-            duration={effectiveDuration}
-            segments={segments}
-            currentTime={currentTime}
-            wordSpans={wordSpans}
-            onSeek={handleSeek}
-            height={72}
-          />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, minHeight: 0 }}>
+        <div style={{ position: 'relative', height: '100%', maxWidth: '100%', aspectRatio: '16 / 9' }}>
+          <video
+            ref={videoRef}
+            src={src}
+            style={{ width: '100%', height: '100%', display: 'block', background: '#000', borderRadius: 3 }}
+          >
+            <track kind="descriptions" src={`/api/vtt?url=${encodeURIComponent(vttUrl)}`} default />
+          </video>
+          {described && activeText && (
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 22, textAlign: 'center', padding: '0 30px' }}>
+              <span style={{
+                fontFamily: mono, fontSize: 13.5, color: '#fff',
+                background: 'rgba(0,0,0,0.74)', padding: '6px 13px',
+                borderRadius: 3, lineHeight: 1.5,
+              }}>
+                {activeText}
+              </span>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* Transport controls */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          padding: '10px 0',
-        }}
-      >
-        {/* Play/pause */}
+      <div style={{
+        flex: 'none', display: 'flex', alignItems: 'center', gap: 14,
+        padding: '9px 16px', background: c.panel, borderTop: `1px solid ${c.rule}`,
+      }}>
         <button
-          onClick={togglePlay}
+          onClick={toggle}
           aria-label={playing ? 'Pause' : 'Play'}
           style={{
-            width: 40, height: 40,
-            background: 'transparent',
-            border: '1px solid #333',
-            borderRadius: 4,
-            color: '#f5a623',
-            cursor: 'pointer',
-            fontSize: 18,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            outline: 'none',
+            width: 30, height: 30, borderRadius: '50%', background: c.raised,
+            border: `1px solid ${c.rule2}`, color: c.amber, fontSize: 10,
+            cursor: 'pointer', flex: 'none',
           }}
-          onFocus={(e) => (e.currentTarget.style.outline = '2px solid #f5a623')}
-          onBlur={(e) => (e.currentTarget.style.outline = 'none')}
         >
-          {playing ? '⏸' : '▶'}
+          {playing ? '❚❚' : '▶'}
         </button>
-
-        {/* Time display */}
-        <span
-          aria-live="off"
-          style={{ fontSize: 12, color: '#767676', fontFamily: 'monospace', minWidth: 90 }}
-        >
-          {fmt(currentTime)} / {fmt(effectiveDuration)}
+        <span style={{ fontFamily: mono, fontSize: 11.5, color: c.text }}>
+          {tc(currentTime)}
+          <span style={{ color: c.faint }}> / {tc(duration)}</span>
         </span>
-
-        {/* Seek back */}
-        <button
-          onClick={() => handleSeek(Math.max(0, currentTime - 5))}
-          aria-label="Seek back 5 seconds"
-          style={{
-            background: 'transparent', border: '1px solid #222', borderRadius: 4,
-            color: '#767676', cursor: 'pointer', fontSize: 11, padding: '4px 8px',
-          }}
-          onFocus={(e) => (e.currentTarget.style.outline = '2px solid #f5a623')}
-          onBlur={(e) => (e.currentTarget.style.outline = 'none')}
-        >
-          ← 5s
-        </button>
-
-        {/* Seek forward */}
-        <button
-          onClick={() => handleSeek(Math.min(effectiveDuration, currentTime + 5))}
-          aria-label="Seek forward 5 seconds"
-          style={{
-            background: 'transparent', border: '1px solid #222', borderRadius: 4,
-            color: '#767676', cursor: 'pointer', fontSize: 11, padding: '4px 8px',
-          }}
-          onFocus={(e) => (e.currentTarget.style.outline = '2px solid #f5a623')}
-          onBlur={(e) => (e.currentTarget.style.outline = 'none')}
-        >
-          5s →
-        </button>
+        <button onClick={() => nudge(-5)} style={iconBtn} aria-label="Back 5 seconds">◂ 5s</button>
+        <button onClick={() => nudge(5)} style={iconBtn} aria-label="Forward 5 seconds">5s ▸</button>
+        <span aria-live="polite" style={{ fontFamily: mono, fontSize: 10, color: c.faint, marginLeft: 'auto' }}>
+          {described
+            ? (activeText ? 'description playing' : 'space play/pause · ← → seek 5s · click the timeline to jump')
+            : 'original audio — no description'}
+        </span>
       </div>
-
-      {/* Active cue readout */}
-      <div
-        role="status"
-        aria-live="polite"
-        aria-label="Current audio description"
-        style={{
-          minHeight: 36,
-          padding: '8px 12px',
-          background: activeCueText ? 'rgba(245,166,35,0.08)' : 'transparent',
-          border: activeCueText ? '1px solid rgba(245,166,35,0.3)' : '1px solid transparent',
-          borderRadius: 4,
-          transition: 'background 0.3s, border-color 0.3s',
-          marginTop: 4,
-        }}
-      >
-        {activeCueText ? (
-          <p style={{ margin: 0, fontSize: 13, color: '#f5a623', fontFamily: 'monospace', lineHeight: 1.5 }}>
-            {activeCueText}
-          </p>
-        ) : (
-          <p style={{ margin: 0, fontSize: 11, color: '#333', fontFamily: 'monospace' }}>
-            no active description
-          </p>
-        )}
-      </div>
-
-      <p style={{ fontSize: 11, color: '#555', marginTop: 8 }}>
-        Space: play/pause · ← →: seek 5s · click waveform to seek
-      </p>
     </section>
   );
 }

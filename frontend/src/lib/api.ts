@@ -35,6 +35,8 @@ export interface JobResponse {
   peaks_uri?: string | null;
   cues?: CueRecord[] | null;
   events?: PipelineEvent[] | null;
+  source_video_url?: string | null;
+  frame_urls?: Record<string, string> | null;
   result_video_url?: string | null;
   vtt_url?: string | null;
   error?: string | null;

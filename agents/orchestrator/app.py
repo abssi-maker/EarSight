@@ -340,4 +340,34 @@ def get_job(job_id: str):
                 out[field] = gcs.signed_url(raw)
             except Exception as exc:
                 print(f"[orchestrator] signed_url failed for {field}: {exc}")
+
+    # Source video, so the UI can A/B the original against the described mix.
+    raw_src = out.get("video_uri")
+    if raw_src and raw_src.startswith("gs://"):
+        try:
+            out["source_video_url"] = gcs.signed_url(raw_src)
+        except Exception as exc:
+            print(f"[orchestrator] signed_url failed for source video: {exc}")
+
+    # Per-gap frames — the visible evidence that Gemini watched the video.
+    out["frame_urls"] = None
+    manifest_uri = out.get("frames_manifest_uri")
+    if manifest_uri:
+        try:
+            cached = job.get("_frames_manifest")
+            if cached is None:
+                cached = gcs.download_json(manifest_uri)
+                with _jobs_lock:
+                    if job_id in _jobs:
+                        _jobs[job_id]["_frames_manifest"] = cached
+            urls = {}
+            for g in (cached or {}).get("gaps", []):
+                uri = g.get("frame_uri")
+                if uri and uri.startswith("gs://"):
+                    urls[g["gap_id"]] = gcs.signed_url(uri)
+            out["frame_urls"] = urls or None
+        except Exception as exc:
+            print(f"[orchestrator] frame_urls failed: {exc}")
+
+    out.pop("_frames_manifest", None)
     return out

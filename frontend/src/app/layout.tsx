@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
+import { c, sans } from '@/lib/theme';
 
 export const metadata: Metadata = {
   title: 'EarSight — Audio Description for Video',
-  description: 'Drop a video. Hear everything.',
+  description: 'Hear what you cannot watch.',
 };
 
 export default function RootLayout({
@@ -12,7 +13,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, background: '#0a0a0a', color: '#e5e5e5', fontFamily: 'monospace' }}>
+      <body
+        style={{
+          margin: 0,
+          background: c.bg,
+          color: c.text,
+          fontFamily: sans,
+          WebkitFontSmoothing: 'antialiased',
+          overflow: 'hidden',
+        }}
+      >
         {children}
       </body>
     </html>
