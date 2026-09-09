@@ -3,10 +3,9 @@ Describer agent — ADK LlmAgent with forced budget/collision guards.
 
 Architecture:
 - describe_gaps() is the public entry point; agents/describer/app.py calls it.
-- Single ADK LlmAgent invocation: the whole video is attached once, all gaps are
-  described in one prompt, the model calls check_budget / check_collision per candidate
-  cue inside that one invocation (tool_config mode=ANY is kept — forced function calling
-  is deliberate).
+- Batched ADK invocation: the whole video is attached ONCE, all gaps are described
+  in one prompt via submit_cues (plural). Falls back to per-gap _run_adk_gap if the
+  batch returns None (never submitted).
 - Still-frame fallback (per-gap _cached_generate) when video_gcs_uri is None.
 - Post-generation asserts in app.py remain the hard guarantee. Belt and braces.
 """
@@ -157,8 +156,8 @@ def check_collision(start: float, end: float, dialogue_spans_json: str) -> dict:
     return {"collides": False, "overlapping_span": None}
 
 
-# ── Per-gap ADK invocation ─────────────────────────────────────────────────────
-_MAX_LLM_CALLS = 8  # hard ceiling per gap — prevents infinite tool-call loops
+# ── ADK invocation helpers ─────────────────────────────────────────────────────
+_MAX_LLM_CALLS = 8  # hard ceiling per single-gap call
 
 
 def _run_adk_gap(
@@ -193,84 +192,220 @@ def _run_adk_gap(
         print(f"[describer] {gap_id}: tool submit_cue(text={repr(text)[:60]}, skip={repr(skip_reason)})")
         return {"accepted": True, "gap_id": gap_id}
 
-    model_name = GEMINI_MODELS[0]
-
-    agent = LlmAgent(
-        name="copy_writer",
-        model=model_name,
-        instruction=gap_prompt,
-        tools=[_check_budget, _check_collision, submit_cue],
-        generate_content_config=types.GenerateContentConfig(
-            safety_settings=_SAFETY_SETTINGS,
-            tool_config=types.ToolConfig(
-                function_calling_config=types.FunctionCallingConfig(
-                    mode="ANY",
-                    allowed_function_names=["_check_budget", "_check_collision", "submit_cue"],
-                )
+    last_err: Optional[Exception] = None
+    for model_name in GEMINI_MODELS:
+        agent = LlmAgent(
+            name="copy_writer",
+            model=model_name,
+            instruction=gap_prompt,
+            tools=[_check_budget, _check_collision, submit_cue],
+            generate_content_config=types.GenerateContentConfig(
+                safety_settings=_SAFETY_SETTINGS,
+                tool_config=types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",
+                        allowed_function_names=["_check_budget", "_check_collision", "submit_cue"],
+                    )
+                ),
             ),
-        ),
-    )
-
-    session_service = InMemorySessionService()
-    runner = Runner(
-        app_name="earsight_describer",
-        agent=agent,
-        session_service=session_service,
-    )
-
-    async def _run() -> tuple[Optional[str], Optional[str]]:
-        session = await session_service.create_session(
-            app_name="earsight_describer",
-            user_id="system",
         )
-        user_parts = []
-        if video_part is not None:
-            user_parts.append(video_part)
-        user_parts.append(types.Part.from_text(text="Write the description cue for this gap now."))
 
-        # Break as soon as submit_cue is seen — mode=ANY would force more calls
-        # after it, looping until max_llm_calls is hit and discarding the result.
-        captured_cue: Optional[dict] = None
-        try:
-            async for event in runner.run_async(
+        session_service = InMemorySessionService()
+        runner = Runner(
+            app_name="earsight_describer",
+            agent=agent,
+            session_service=session_service,
+        )
+
+        async def _run() -> tuple[Optional[str], Optional[str]]:
+            session = await session_service.create_session(
+                app_name="earsight_describer",
                 user_id="system",
-                session_id=session.id,
-                new_message=types.Content(role="user", parts=user_parts),
-                run_config=RunConfig(max_llm_calls=_MAX_LLM_CALLS),
-            ):
-                if hasattr(event, "content") and event.content:
-                    for part in event.content.parts:
-                        if hasattr(part, "function_call") and part.function_call:
-                            fc = part.function_call
-                            if fc.name == "submit_cue":
-                                captured_cue = dict(fc.args) if fc.args else {}
-                                break  # stop consuming events immediately
-                if captured_cue is not None:
-                    break
-        except Exception:
-            # If an exception fires (e.g. max_llm_calls) but we already captured
-            # a submit_cue, use it — only re-raise when nothing was captured.
+            )
+            user_parts = []
+            if video_part is not None:
+                user_parts.append(video_part)
+            user_parts.append(types.Part.from_text(text="Write the description cue for this gap now."))
+
+            # Break as soon as submit_cue is seen — mode=ANY would force more calls
+            # after it, looping until max_llm_calls is hit and discarding the result.
+            captured_cue: Optional[dict] = None
+            try:
+                async for event in runner.run_async(
+                    user_id="system",
+                    session_id=session.id,
+                    new_message=types.Content(role="user", parts=user_parts),
+                    run_config=RunConfig(max_llm_calls=_MAX_LLM_CALLS),
+                ):
+                    if hasattr(event, "content") and event.content:
+                        for part in event.content.parts:
+                            if hasattr(part, "function_call") and part.function_call:
+                                fc = part.function_call
+                                if fc.name == "submit_cue":
+                                    captured_cue = dict(fc.args) if fc.args else {}
+                                    break  # stop consuming events immediately
+                    if captured_cue is not None:
+                        break
+            except Exception:
+                # If an exception fires (e.g. max_llm_calls) but we already captured
+                # a submit_cue, use it — only re-raise when nothing was captured.
+                if captured_cue is None:
+                    raise
+
             if captured_cue is None:
-                raise
+                return None, "no_submit"
 
-        if captured_cue is None:
-            return None, "no_submit"
+            text = captured_cue.get("text") or None
+            skip_reason = captured_cue.get("skip_reason") or None
+            # Treat empty string as skip
+            if text == "":
+                text = None
+            return text, skip_reason
 
-        text = captured_cue.get("text") or None
-        skip_reason = captured_cue.get("skip_reason") or None
-        # Treat empty string as skip
-        if text == "":
-            text = None
-        return text, skip_reason
-
-    try:
-        return asyncio.run(_run())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(_run())
-        finally:
-            loop.close()
+            try:
+                return asyncio.run(_run())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(_run())
+                finally:
+                    loop.close()
+        except Exception as err:
+            print(f"[describer] {gap_id}: {model_name} failed: {str(err)[:100]}")
+            last_err = err
+
+    raise last_err  # type: ignore[misc]
+
+
+
+def _run_adk_all_gaps(
+    gaps: list[Gap],
+    batch_prompt: str,
+    dialogue_spans_json: str,
+    video_part: Optional[types.Part],
+) -> Optional[dict]:
+    """
+    Single ADK LlmAgent invocation that describes ALL gaps in one call.
+
+    The video is attached once. The terminal tool is submit_cues(cues_json: str)
+    where cues_json is a JSON string of [{gap_id, text, skip_reason}, ...].
+    Returns {gap_id: {"text": ..., "skip_reason": ...}}, or None if the model
+    never called submit_cues within the call budget.
+    """
+    _max_calls = 6 + 2 * len(gaps)
+
+    def _check_collision(start: float, end: float) -> dict:
+        """Check whether cue [start, end] overlaps any dialogue span."""
+        print(f"[describer] batch: tool _check_collision({start}, {end})")
+        return check_collision(start, end, dialogue_spans_json)
+
+    def _check_budget(text: str, gap_seconds: float) -> dict:
+        """Check word budget for text against a gap of gap_seconds seconds."""
+        print(f"[describer] batch: tool _check_budget(words={count_words(text)}, secs={gap_seconds})")
+        return check_budget(text, gap_seconds)
+
+    def submit_cues(cues_json: str) -> dict:
+        """Submit all description cues as a JSON string encoding a list of
+        {gap_id, text, skip_reason} objects. Call this once, after all
+        check_budget and check_collision calls are complete.
+        Example: '[{"gap_id":"gap_0","text":"A man walks in.","skip_reason":""},
+                   {"gap_id":"gap_1","text":"","skip_reason":"redundant"}]'
+        """
+        print(f"[describer] batch: tool submit_cues called")
+        return {"accepted": True}
+
+    last_err: Optional[Exception] = None
+    for model_name in GEMINI_MODELS:
+        agent = LlmAgent(
+            name="batch_copy_writer",
+            model=model_name,
+            instruction=batch_prompt,
+            tools=[_check_budget, _check_collision, submit_cues],
+            generate_content_config=types.GenerateContentConfig(
+                safety_settings=_SAFETY_SETTINGS,
+                tool_config=types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",
+                        allowed_function_names=["_check_budget", "_check_collision", "submit_cues"],
+                    )
+                ),
+            ),
+        )
+
+        session_service = InMemorySessionService()
+        runner = Runner(
+            app_name="earsight_describer",
+            agent=agent,
+            session_service=session_service,
+        )
+
+        async def _run() -> Optional[dict]:
+            session = await session_service.create_session(
+                app_name="earsight_describer",
+                user_id="system",
+            )
+            user_parts = []
+            if video_part is not None:
+                user_parts.append(video_part)
+            user_parts.append(types.Part.from_text(text="Write description cues for all gaps now."))
+
+            captured_cues_json: Optional[str] = None
+            try:
+                async for event in runner.run_async(
+                    user_id="system",
+                    session_id=session.id,
+                    new_message=types.Content(role="user", parts=user_parts),
+                    run_config=RunConfig(max_llm_calls=_max_calls),
+                ):
+                    if hasattr(event, "content") and event.content:
+                        for part in event.content.parts:
+                            if hasattr(part, "function_call") and part.function_call:
+                                fc = part.function_call
+                                if fc.name == "submit_cues":
+                                    captured_cues_json = (fc.args or {}).get("cues_json")
+                                    break
+                    if captured_cues_json is not None:
+                        break
+            except Exception:
+                if captured_cues_json is None:
+                    raise
+
+            if captured_cues_json is None:
+                return None
+
+            try:
+                cues_list = json.loads(captured_cues_json)
+            except Exception as exc:
+                print(f"[describer] batch: submit_cues JSON parse error: {exc}")
+                return None
+
+            result: dict = {}
+            for entry in cues_list:
+                gid = entry.get("gap_id")
+                if gid:
+                    result[gid] = {
+                        "text": entry.get("text") or None,
+                        "skip_reason": entry.get("skip_reason") or None,
+                    }
+            return result
+
+        try:
+            try:
+                result = asyncio.run(_run())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                try:
+                    result = loop.run_until_complete(_run())
+                finally:
+                    loop.close()
+            return result
+        except Exception as err:
+            print(f"[describer] batch: {model_name} failed: {str(err)[:100]}")
+            last_err = err
+
+    raise last_err  # type: ignore[misc]
+
 
 
 def describe_gaps(
@@ -314,7 +449,7 @@ def describe_gaps(
             "following_dialogue": g.following_context,
         })
 
-    # ── VIDEO PATH (per-gap ADK calls with submit_cue terminal tool) ───────────
+    # ── VIDEO PATH ────────────────────────────────────────────────────────────
     if video_gcs_uri:
         try:
             video_part: Optional[types.Part] = types.Part.from_uri(
@@ -328,9 +463,52 @@ def describe_gaps(
         video_part = None
 
     if video_part is not None:
-        print(f"[describer] ADK per-gap path — {len(gaps_sorted)} gaps, video attached each call")
-        cues: list[Cue] = []
+        print(f"[describer] video attached ONCE — {len(gaps_sorted)} gaps, batched ADK call")
         _t0 = _time.time()
+
+        # Build the batch prompt
+        gaps_table_json = json.dumps(gaps_table, indent=2)
+        batch_prompt = f"""You are writing audio description cues for a short video —
+narration spoken in silence gaps for blind and low-vision viewers.
+The video is attached. Do NOT add VideoMetadata offsets; you see the full clip.
+
+Full transcript:
+{transcript.full_text or "(no dialogue)"}
+
+All gaps to describe:
+{gaps_table_json}
+
+Dialogue spans (JSON) — no cue may overlap these:
+{dialogue_spans_json}
+
+Steps for EACH gap (in order):
+1. Draft a cue text of at most word_budget words.
+2. Call _check_budget(text, gap_seconds) to verify it fits.
+3. Call _check_collision(start, end) to verify no dialogue overlap.
+4. Revise if either check fails.
+After ALL gaps are processed, call submit_cues(cues_json=...) ONCE with a
+JSON *string* encoding a list of objects, one per gap:
+  '[{{"gap_id":"gap_0","text":"A man walks in.","skip_reason":""}}, ...]'
+Pass text="" and a skip_reason to skip a gap.
+
+Rules:
+- Each cue MUST be at most word_budget words — hard limit per gap
+- Present tense, active voice, specific and visual
+- Never mention camera angles or filmmaking
+- No cue may repeat a fact already stated in another cue in this batch
+- Skip if: budget < 3, dialogue conveys the scene, or nothing visual is worth describing
+"""
+
+        batch_results: Optional[dict] = None
+        try:
+            batch_results = _run_adk_all_gaps(gaps_sorted, batch_prompt, dialogue_spans_json, video_part)
+        except Exception as exc:
+            print(f"[describer] batch ADK error: {exc} — will fall back per-gap")
+
+        if batch_results is None:
+            print(f"[describer] batch returned None — falling back to per-gap ADK calls")
+
+        cues: list[Cue] = []
 
         for gap in gaps_sorted:
             budget = word_budget(gap.duration)
@@ -344,8 +522,24 @@ def describe_gaps(
                 print(f"[describer] {gap.gap_id}: SKIP (budget={budget} < 3)")
                 continue
 
-            facts_str = json.dumps(established_facts) if established_facts else "[]"
-            gap_prompt = f"""You are writing one audio description cue for a short video —
+            # Read from batch results, or fall back to per-gap ADK call
+            if batch_results is not None:
+                entry = batch_results.get(gap.gap_id)
+                if entry is None:
+                    # Gap missing from batch or hallucinated gap_id — treat as no_submit
+                    print(f"[describer] {gap.gap_id}: missing from batch — skip (no_submit)")
+                    cues.append(Cue(
+                        cue_id=f"cue_{gap.gap_id}",
+                        start=gap.start, end=gap.end,
+                        text=None, gap_id=gap.gap_id, skip_reason="no_submit",
+                    ))
+                    continue
+                text = entry.get("text")
+                skip_reason = entry.get("skip_reason")
+            else:
+                # Per-gap fallback
+                facts_str = json.dumps(established_facts) if established_facts else "[]"
+                gap_prompt = f"""You are writing one audio description cue for a short video —
 narration spoken in a silence gap for blind and low-vision viewers.
 The video is attached. Do NOT add VideoMetadata offsets; you see the full clip.
 
@@ -374,18 +568,17 @@ Rules:
 - Never repeat an established fact
 - Skip if: budget < 3, dialogue conveys the scene, or nothing visual is worth describing
 """
-
-            print(f"[describer] {gap.gap_id}: writing copy via ADK (budget={budget} words)...")
-            try:
-                text, skip_reason = _run_adk_gap(gap.gap_id, gap_prompt, dialogue_spans_json, video_part)
-            except Exception as exc:
-                print(f"[describer] {gap.gap_id}: ADK error: {exc} — skipping gap")
-                cues.append(Cue(
-                    cue_id=f"cue_{gap.gap_id}",
-                    start=gap.start, end=gap.end,
-                    text=None, gap_id=gap.gap_id, skip_reason="error",
-                ))
-                continue
+                print(f"[describer] {gap.gap_id}: writing copy via ADK per-gap (budget={budget} words)...")
+                try:
+                    text, skip_reason = _run_adk_gap(gap.gap_id, gap_prompt, dialogue_spans_json, video_part)
+                except Exception as exc:
+                    print(f"[describer] {gap.gap_id}: ADK error: {exc} — skipping gap")
+                    cues.append(Cue(
+                        cue_id=f"cue_{gap.gap_id}",
+                        start=gap.start, end=gap.end,
+                        text=None, gap_id=gap.gap_id, skip_reason="error",
+                    ))
+                    continue
 
             if text is None:
                 reason = skip_reason or "salience"
@@ -421,7 +614,7 @@ Rules:
             cues.append(cue)
             print(f"[describer] {gap.gap_id}: ✓ '{text}' ({wc}/{budget} words)")
 
-        print(f"[describer] ADK per-gap pass done in {_time.time()-_t0:.1f}s")
+        print(f"[describer] ADK video path done in {_time.time()-_t0:.1f}s")
         return cues
 
     # ── STILL-FRAME FALLBACK (video_gcs_uri is None or video_part failed) ──────

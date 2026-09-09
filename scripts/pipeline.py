@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--output-dir", "-o", default="demo/output", help="Output directory")
     parser.add_argument("--skip-transcription", action="store_true",
                         help="Use cached transcript if available")
+    parser.add_argument("--video-gcs-uri", default=None,
+                        help="GCS URI for the video (enables batched video ADK path)")
     args = parser.parse_args()
 
     video_path = args.input
@@ -106,7 +108,7 @@ def main():
 
     # ── Step 3: Description ───────────────────────────────────────────────────
     print("[pipeline] ── Step 3: Description (two-pass Gemini) ─────────────")
-    cues = describe_gaps(transcript, gaps)
+    cues = describe_gaps(transcript, gaps, video_gcs_uri=args.video_gcs_uri)
 
     # Final collision guard — belt-and-suspenders check before writing output
     active_cues = [c for c in cues if c.text is not None]
