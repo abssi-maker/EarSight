@@ -2,6 +2,8 @@
 
 **Drop a video. Hear everything.**
 
+**Demo video:** https://www.youtube.com/watch?v=JJeedOXAY3k
+
 EarSight is a distributed AI agent crew that produces an audio description track for
 short videos. It finds silences between dialogue, decides what is worth narrating in
 each gap, synthesises speech, and mixes it into the original audio — returning a
